@@ -43,7 +43,7 @@ module RBLE
 
           # Start event processing
           @event_loop.start(@connection.bus)
-        rescue => e
+        rescue
           cleanup
           raise
         end
@@ -55,8 +55,8 @@ module RBLE
 
         begin
           @adapter&.stop_discovery
-        rescue => e
-          # Log but don't raise during cleanup
+        rescue
+          # Ignore errors during cleanup
         end
 
         cleanup
@@ -159,7 +159,7 @@ module RBLE
             end
           end
           @signal_handlers << [:properties_changed, props_iface, device_path]
-        rescue => e
+        rescue
           # Device may have disappeared, ignore
         end
       end
