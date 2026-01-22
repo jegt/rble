@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require_relative "rble/version"
-require_relative "rble/errors"
-require_relative "rble/device"
-require_relative "rble/backend"
+require_relative 'rble/version'
+require_relative 'rble/errors'
+require_relative 'rble/device'
+require_relative 'rble/backend'
 
 module RBLE
   # Main module for RBLE BLE library

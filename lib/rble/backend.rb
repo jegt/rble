@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "backend/base"
+require_relative 'backend/base'
 
 module RBLE
   module Backend
@@ -10,10 +10,10 @@ module RBLE
     def self.for_platform
       case RUBY_PLATFORM
       when /linux/
-        require_relative "backend/bluez"
+        require_relative 'backend/bluez'
         BlueZ.new
       when /darwin/
-        raise Error, "macOS support not yet implemented"
+        raise Error, 'macOS support not yet implemented'
       else
         raise Error, "Unsupported platform: #{RUBY_PLATFORM}"
       end

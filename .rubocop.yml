@@ -8,3 +8,8 @@ Style/Documentation:
 
 Layout/LineLength:
   Max: 120
+
+# Data.define requires all fields in initialize, parameter count is intentional
+Metrics/ParameterLists:
+  Exclude:
+    - 'lib/rble/device.rb'

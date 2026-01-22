@@ -32,7 +32,7 @@ module RBLE
       service_data: {},
       service_uuids: [],
       tx_power: nil,
-      address_type: "public"
+      address_type: 'public'
     )
       super
     end
