@@ -134,14 +134,14 @@ module RBLE
         object_manager = root[RBLE::BlueZ::OBJECT_MANAGER_INTERFACE]
 
         object_manager.on_signal("InterfacesAdded") do |path, interfaces|
-          if interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE)
+          if interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE) && @event_loop
             @event_loop.enqueue(:device_found, path, interfaces[RBLE::BlueZ::DEVICE_INTERFACE])
           end
         end
         @signal_handlers << [:interfaces_added, object_manager]
 
         object_manager.on_signal("InterfacesRemoved") do |path, interfaces|
-          if interfaces.include?(RBLE::BlueZ::DEVICE_INTERFACE)
+          if interfaces.include?(RBLE::BlueZ::DEVICE_INTERFACE) && @event_loop
             @event_loop.enqueue(:device_removed, path, nil)
           end
         end
@@ -154,7 +154,7 @@ module RBLE
           props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
           props_iface.on_signal("PropertiesChanged") do |interface, changed, invalidated|
-            if interface == RBLE::BlueZ::DEVICE_INTERFACE
+            if interface == RBLE::BlueZ::DEVICE_INTERFACE && @event_loop
               @event_loop.enqueue(:properties_changed, device_path, changed)
             end
           end
