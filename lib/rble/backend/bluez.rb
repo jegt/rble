@@ -25,6 +25,10 @@ module RBLE
 
         # Connection object tracking for disconnect notifications
         @connection_objects = {} # device_path => Connection instance
+
+        # Monitoring infrastructure for disconnect detection
+        @monitoring_loop = nil
+        @monitoring_mutex = Mutex.new
       end
 
       # Start scanning for BLE devices
@@ -366,7 +370,64 @@ module RBLE
       # @param device_path [String] D-Bus device path
       # @param connection [Connection] Connection to notify on disconnect
       def setup_disconnect_monitoring(device_path, connection)
-        # Implementation in Task 2
+        conn = ensure_connection
+        device_obj = conn.object(device_path)
+        props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
+
+        # Subscribe to PropertiesChanged for this device
+        # The signal handler will be called when any property changes
+        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+          next unless interface == RBLE::BlueZ::DEVICE_INTERFACE
+          next unless changed.key?('Connected')
+
+          if changed['Connected'] == false
+            # Device disconnected unexpectedly
+            # BlueZ doesn't expose disconnect reason via D-Bus, always use :link_loss
+            handle_unexpected_disconnect(device_path)
+          end
+        end
+
+        # Start monitoring event loop if not already running
+        start_monitoring_loop(conn)
+      end
+
+      # Handle unexpected disconnect detected via PropertiesChanged signal
+      # @param device_path [String] D-Bus device path
+      def handle_unexpected_disconnect(device_path)
+        connection = @connection_objects[device_path]
+        return unless connection
+
+        # Clean up tracking state
+        @connected_devices.delete(device_path)
+        @device_services.delete(device_path)
+        unregister_connection(device_path)
+
+        # Clear any active subscriptions for this device's characteristics
+        @subscriptions.keys.each do |char_path|
+          @subscriptions.delete(char_path) if char_path.start_with?(device_path)
+        end
+
+        # Notify the Connection object with link_loss reason
+        connection.handle_disconnect(:link_loss)
+      end
+
+      # Start the background monitoring event loop for disconnect detection
+      # @param conn [DBusConnection] D-Bus connection
+      def start_monitoring_loop(conn)
+        @monitoring_mutex.synchronize do
+          return if @monitoring_loop&.running?
+
+          @monitoring_loop = RBLE::BlueZ::EventLoop.new
+          @monitoring_loop.start(conn.bus)
+        end
+      end
+
+      # Stop the background monitoring event loop
+      def stop_monitoring_loop
+        @monitoring_mutex.synchronize do
+          @monitoring_loop&.stop
+          @monitoring_loop = nil
+        end
       end
 
       # Translate D-Bus errors to human-readable messages
@@ -609,12 +670,14 @@ module RBLE
         @scanning = false
         @event_loop&.stop
         @event_loop = nil
+        stop_monitoring_loop
         @signal_handlers.clear
         @connection&.disconnect
         @connection = nil
         @adapter = nil
         @scan_callback = nil
         @known_devices.clear
+        @connection_objects.clear
       end
 
       # Ensure we have a D-Bus connection (reuse if available)
