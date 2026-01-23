@@ -4,7 +4,9 @@ module RBLE
   # Represents a connection to a BLE device
   #
   # Provides access to GATT services and characteristics for reading,
-  # writing, and subscribing to values.
+  # writing, and subscribing to values. Includes a state machine for
+  # tracking connection lifecycle and callback support for disconnect
+  # notifications.
   #
   # @example Connect and read a characteristic
   #   connection = RBLE.connect(device.address)
@@ -14,7 +16,22 @@ module RBLE
   #   # Future: value = measurement.read (Plan 04)
   #   connection.disconnect
   #
+  # @example Register disconnect callback
+  #   connection = RBLE.connect(device.address)
+  #   connection.on_disconnect { |reason| puts "Disconnected: #{reason}" }
+  #   connection.on_state_change { |old_state, new_state| puts "#{old_state} -> #{new_state}" }
+  #
   class Connection
+    # Valid state transitions for the connection lifecycle
+    # @return [Hash{Symbol => Array<Symbol>}]
+    VALID_TRANSITIONS = {
+      disconnected: [:connecting],
+      connecting: [:connected, :disconnected],
+      connected: [:disconnecting, :discovering_services, :disconnected],
+      discovering_services: [:connected, :disconnected],
+      disconnecting: [:disconnected]
+    }.freeze
+
     attr_reader :address, :device_path
 
     # Create a connection (internal - use RBLE.connect)
@@ -26,13 +43,50 @@ module RBLE
       @device_path = device_path
       @backend = backend
       @services = nil
-      @connected = true
+
+      # State machine infrastructure
+      @state = :connecting
+      @state_mutex = Mutex.new
+      @state_callbacks = []
+      @disconnect_callbacks = []
+
+      # Transition to connected (connection already established by RBLE.connect)
+      transition_to(:connected)
+    end
+
+    # Get the current connection state
+    # @return [Symbol] One of :disconnected, :connecting, :connected, :disconnecting, :discovering_services
+    def state
+      @state_mutex.synchronize { @state }
     end
 
     # Check if still connected
     # @return [Boolean]
     def connected?
-      @connected
+      state == :connected
+    end
+
+    # Register a callback for disconnect events
+    # @yield [Symbol] Called with disconnect reason when disconnection occurs
+    # @yieldparam reason [Symbol] The disconnect reason (:user_requested, :link_loss, :timeout, etc.)
+    # @raise [ArgumentError] if no block given
+    # @return [void]
+    def on_disconnect(&block)
+      raise ArgumentError, 'Block required for on_disconnect' unless block_given?
+
+      @state_mutex.synchronize { @disconnect_callbacks << block }
+    end
+
+    # Register a callback for state change events
+    # @yield [Symbol, Symbol] Called with (old_state, new_state) on every state transition
+    # @yieldparam old_state [Symbol] The previous state
+    # @yieldparam new_state [Symbol] The new state
+    # @raise [ArgumentError] if no block given
+    # @return [void]
+    def on_state_change(&block)
+      raise ArgumentError, 'Block required for on_state_change' unless block_given?
+
+      @state_mutex.synchronize { @state_callbacks << block }
     end
 
     # Discover GATT services on the connected device
@@ -43,10 +97,19 @@ module RBLE
     # @raise [NotConnectedError] if not connected
     # @raise [ServiceDiscoveryError] if discovery fails
     def discover_services(timeout: 30)
-      raise NotConnectedError unless @connected
+      raise NotConnectedError unless connected?
 
-      raw_services = @backend.discover_services(@device_path, timeout: timeout)
-      @services = build_services_with_active_characteristics(raw_services)
+      transition_to(:discovering_services)
+      begin
+        raw_services = @backend.discover_services(@device_path, timeout: timeout)
+        @services = build_services_with_active_characteristics(raw_services)
+        transition_to(:connected)
+        @services
+      rescue StandardError
+        # On failure, return to connected state (if not already disconnected)
+        transition_to(:connected) if state == :discovering_services
+        raise
+      end
     end
 
     # Get all discovered services
@@ -76,11 +139,27 @@ module RBLE
     # Disconnect from the device
     # @return [void]
     def disconnect
-      return unless @connected
+      current = state
+      return if current == :disconnected || current == :disconnecting
 
-      @backend.disconnect_device(@device_path)
-      @connected = false
+      transition_to(:disconnecting)
+      begin
+        @backend.disconnect_device(@device_path)
+      ensure
+        transition_to(:disconnected, reason: :user_requested)
+        @services = nil
+      end
+    end
+
+    # Handle disconnection detected by backend
+    # @param reason [Symbol] Disconnect reason (:link_loss, :timeout, :remote_disconnect, etc.)
+    # @return [Boolean] true if transition happened, false if already disconnected
+    def handle_disconnect(reason)
+      return false if state == :disconnected
+
+      transition_to(:disconnected, reason: reason)
       @services = nil
+      true
     end
 
     private
@@ -116,6 +195,49 @@ module RBLE
       else
         short_uuid.downcase
       end
+    end
+
+    # Transition to a new state, calling callbacks outside the mutex
+    # @param new_state [Symbol] The state to transition to
+    # @param reason [Symbol, nil] Disconnect reason (only for :disconnected state)
+    # @return [Boolean] true if transition succeeded, false if invalid
+    def transition_to(new_state, reason: nil)
+      old_state = nil
+      state_callbacks_copy = []
+      disconnect_callbacks_copy = []
+
+      @state_mutex.synchronize do
+        return false unless VALID_TRANSITIONS[@state]&.include?(new_state)
+
+        old_state = @state
+        @state = new_state
+
+        # Copy callbacks while holding lock
+        state_callbacks_copy = @state_callbacks.dup
+        disconnect_callbacks_copy = @disconnect_callbacks.dup if new_state == :disconnected
+      end
+
+      # Call callbacks outside mutex to prevent deadlocks
+      state_callbacks_copy.each do |callback|
+        begin
+          callback.call(old_state, new_state)
+        rescue StandardError => e
+          warn "[RBLE] State change callback error: #{e.message}"
+        end
+      end
+
+      # Call disconnect callbacks if transitioning to disconnected
+      if new_state == :disconnected
+        disconnect_callbacks_copy.each do |callback|
+          begin
+            callback.call(reason)
+          rescue StandardError => e
+            warn "[RBLE] Disconnect callback error: #{e.message}"
+          end
+        end
+      end
+
+      true
     end
   end
 

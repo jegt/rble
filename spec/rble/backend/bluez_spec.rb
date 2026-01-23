@@ -10,6 +10,8 @@ RSpec.describe RBLE::Backend::BlueZ do
     context "when BlueZ is available" do
       # This test requires actual D-Bus - skip in CI without BT hardware
       it "returns array of adapter hashes", :bluetooth do
+        skip "Requires D-Bus (Linux only)" unless dbus_available?
+
         adapters = backend.adapters
         expect(adapters).to be_an(Array)
 
@@ -55,7 +57,13 @@ RSpec.describe RBLE::Backend::BlueZ do
 
   private
 
+  def dbus_available?
+    File.exist?('/var/run/dbus/system_bus_socket')
+  end
+
   def bluetooth_available?
+    return false unless dbus_available?
+
     backend.adapters.any? { |a| a[:powered] }
   rescue
     false
