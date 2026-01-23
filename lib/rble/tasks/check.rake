@@ -3,7 +3,7 @@
 namespace :rble do
   desc 'Check system BLE readiness'
   task :check do
-    require 'rble'
+    require_relative '../../rble'
 
     checker = RBLE::SystemChecker.new
     checker.run

@@ -3,7 +3,7 @@
 namespace :test do
   desc 'Run integration test with real BLE hardware'
   task :integration do
-    require 'rble'
+    require_relative '../../rble'
 
     test = RBLE::IntegrationTest.new
     test.run
