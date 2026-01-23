@@ -765,6 +765,24 @@ module RBLE
         end
       end
 
+      # Unsubscribe from all registered D-Bus signal handlers
+      # Calling on_signal without a block unregisters the handler in ruby-dbus
+      def unsubscribe_signal_handlers
+        @signal_handlers.each do |entry|
+          case entry.first
+          when :interfaces_added
+            entry[1].on_signal('InterfacesAdded')
+          when :interfaces_removed
+            entry[1].on_signal('InterfacesRemoved')
+          when :properties_changed
+            entry[1].on_signal('PropertiesChanged')
+          end
+        rescue StandardError
+          # Ignore errors during signal cleanup
+        end
+        @signal_handlers.clear
+      end
+
       # Clean up scan-specific state only, preserving D-Bus connection for subsequent operations
       # Called after stop_scan to allow connect without re-establishing connection
       def stop_scan_cleanup
@@ -778,8 +796,7 @@ module RBLE
           @known_devices.clear
         end
 
-        # Clear scan-specific signal handlers (keep disconnect monitoring handlers)
-        @signal_handlers.clear
+        unsubscribe_signal_handlers
         @scan_callback = nil
       end
 
@@ -801,7 +818,7 @@ module RBLE
           @subscriptions.clear
         end
 
-        @signal_handlers.clear
+        unsubscribe_signal_handlers
         @connection&.disconnect
         @connection = nil
         @adapter = nil
