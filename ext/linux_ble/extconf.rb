@@ -38,7 +38,7 @@ unless swift_path
   abort <<~MSG
 
     ERROR: Swift compiler not found.
-    The Linux BLE helper requires Swift 5.9 or later to compile.
+    The Linux BLE helper requires Swift 6.0 or later to compile.
 
     Install Swift from: https://www.swift.org/install/linux/
 
@@ -48,7 +48,7 @@ unless swift_path
   MSG
 end
 
-# Check Swift version (minimum 5.9)
+# Check Swift version (minimum 6.0)
 swift_version_output = `swift --version 2>&1`
 version_match = swift_version_output.match(/Swift version (\d+)\.(\d+)/)
 
@@ -58,7 +58,7 @@ unless version_match
     ERROR: Could not determine Swift version.
     Output: #{swift_version_output}
 
-    The Linux BLE helper requires Swift 5.9 or later.
+    The Linux BLE helper requires Swift 6.0 or later.
     Install Swift from: https://www.swift.org/install/linux/
 
   MSG
@@ -67,11 +67,11 @@ end
 major = version_match[1].to_i
 minor = version_match[2].to_i
 
-if major < 5 || (major == 5 && minor < 9)
+if major < 6
   abort <<~MSG
 
     ERROR: Swift version #{major}.#{minor} is too old.
-    The Linux BLE helper requires Swift 5.9 or later.
+    The Linux BLE helper requires Swift 6.0 or later.
     You have: #{swift_version_output.lines.first&.strip}
 
     Install a newer Swift from: https://www.swift.org/install/linux/

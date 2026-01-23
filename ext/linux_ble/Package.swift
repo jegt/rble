@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -13,9 +13,10 @@ let package = Package(
     ],
     dependencies: [
         // BluetoothLinux - direct HCI access bypassing D-Bus
-        .package(url: "https://github.com/PureSwift/BluetoothLinux.git", from: "5.0.0"),
+        // Using master branch as stable releases have dependency resolution issues with Swift 6
+        .package(url: "https://github.com/PureSwift/BluetoothLinux.git", branch: "master"),
         // GATT - Generic Attribute Profile implementation
-        .package(url: "https://github.com/PureSwift/GATT.git", from: "3.3.0")
+        .package(url: "https://github.com/PureSwift/GATT.git", branch: "master")
     ],
     targets: [
         .executableTarget(

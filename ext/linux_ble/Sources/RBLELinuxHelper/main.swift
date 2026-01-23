@@ -10,6 +10,13 @@ import Foundation
 
 // MARK: - Output Functions
 
+/// Write data to stdout with proper flushing
+private func writeToStdout(_ string: String) {
+    if let data = (string + "\n").data(using: .utf8) {
+        FileHandle.standardOutput.write(data)
+    }
+}
+
 /// Write a response to stdout as a single JSON line (thread-safe)
 func writeResponse(_ response: Response) {
     let encoder = JSONEncoder()
@@ -17,13 +24,11 @@ func writeResponse(_ response: Response) {
     do {
         let jsonData = try encoder.encode(response)
         if let jsonString = String(data: jsonData, encoding: .utf8) {
-            print(jsonString)
-            fflush(stdout)
+            writeToStdout(jsonString)
         }
     } catch {
         // If encoding fails, write a minimal error response
-        fputs("{\"id\":-1,\"error\":{\"code\":-32603,\"message\":\"Internal error: failed to encode response\"}}\n", stdout)
-        fflush(stdout)
+        writeToStdout("{\"id\":-1,\"error\":{\"code\":-32603,\"message\":\"Internal error: failed to encode response\"}}")
     }
 }
 
@@ -34,12 +39,10 @@ func writeEvent(_ event: Event) {
     do {
         let jsonData = try encoder.encode(event)
         if let jsonString = String(data: jsonData, encoding: .utf8) {
-            print(jsonString)
-            fflush(stdout)
+            writeToStdout(jsonString)
         }
     } catch {
-        fputs("{\"method\":\"error\",\"params\":{\"message\":\"Failed to encode event\"}}\n", stdout)
-        fflush(stdout)
+        writeToStdout("{\"method\":\"error\",\"params\":{\"message\":\"Failed to encode event\"}}")
     }
 }
 
@@ -124,8 +127,7 @@ func validatePrerequisites() {
 // MARK: - Main Entry Point
 
 func main() {
-    // Disable stdout buffering for immediate output
-    setbuf(stdout, nil)
+    // Note: FileHandle.standardOutput used in writeToStdout handles buffering appropriately
 
     // Validate prerequisites BEFORE entering the stdin read loop
     // This ensures errors are reported immediately on startup
