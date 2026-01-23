@@ -10,7 +10,6 @@ module RBLE
       HELPER_PATH = File.expand_path('../../../ext/macos_ble/.build/release/RBLEHelper', __dir__)
 
       def initialize
-        @process = nil
         @stdin = nil
         @stdout = nil
         @stderr = nil
@@ -32,7 +31,7 @@ module RBLE
 
       # Start the subprocess if not running
       def ensure_subprocess
-        return if @process && @wait_thread&.alive?
+        return if @wait_thread&.alive?
 
         unless File.exist?(HELPER_PATH)
           raise SubprocessError, "Helper not found at #{HELPER_PATH}. Run 'swift build -c release' in ext/macos_ble/"
@@ -86,7 +85,6 @@ module RBLE
         @stdout&.close
         @stderr&.close
         @wait_thread&.kill
-        @process = nil
       end
 
       # Backend::Base implementations
