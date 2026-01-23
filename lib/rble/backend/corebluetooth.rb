@@ -21,6 +21,13 @@ module RBLE
         @scan_callback = nil
         @reader_thread = nil
         @event_queue = Queue.new
+
+        # Connection tracking
+        @connected_devices = {}  # device_uuid => true
+        @device_services = {}    # device_uuid => [service_data, ...]
+
+        # Subscription tracking
+        @subscriptions = {}      # char_identifier => callback
       end
 
       # Start the subprocess if not running
@@ -140,17 +147,59 @@ module RBLE
         false # Not a clean shutdown
       end
 
-      # Connection methods - stubs for Plan 04
+      # Connect to a BLE device
+      # @param device_identifier [String] Device UUID (from scanning)
+      # @param timeout [Numeric] Connection timeout in seconds
+      # @return [Boolean] true on successful connection
+      # @raise [AlreadyConnectedError] if already connected
+      # @raise [ConnectionTimeoutError] if connection times out
       def connect_device(device_identifier, timeout: 30)
-        raise NotImplementedError, "#{self.class}#connect_device not yet implemented"
+        # Check if already connected
+        raise AlreadyConnectedError if @connected_devices.key?(device_identifier)
+
+        send_request('connect', {
+          uuid: device_identifier,
+          timeout: timeout
+        }, timeout: timeout + 5) # Extra buffer for subprocess
+
+        @connected_devices[device_identifier] = true
+        true
       end
 
+      # Disconnect from a BLE device
+      # @param device_identifier [String] Device UUID
+      # @return [void]
       def disconnect_device(device_identifier)
-        raise NotImplementedError, "#{self.class}#disconnect_device not yet implemented"
+        @connected_devices.delete(device_identifier)
+        @device_services.delete(device_identifier)
+
+        begin
+          send_request('disconnect', { uuid: device_identifier }, timeout: 5)
+        rescue StandardError
+          # Ignore errors during cleanup
+        end
       end
 
+      # Discover GATT services on a connected device
+      # @param device_identifier [String] Device UUID
+      # @param timeout [Numeric] Discovery timeout in seconds
+      # @return [Array<Hash>] Service data with characteristics
+      # @raise [NotConnectedError] if not connected
+      # @raise [ServiceDiscoveryError] if discovery fails
       def discover_services(device_identifier, timeout: 30)
-        raise NotImplementedError, "#{self.class}#discover_services not yet implemented"
+        raise NotConnectedError unless @connected_devices.key?(device_identifier)
+
+        # Return cached services if available
+        return @device_services[device_identifier] if @device_services.key?(device_identifier)
+
+        result = send_request('discover_services', {
+          uuid: device_identifier,
+          timeout: timeout
+        }, timeout: timeout + 5)
+
+        services = build_services_from_result(result['services'], device_identifier)
+        @device_services[device_identifier] = services
+        services
       end
 
       def device_path_for_address(address, adapter: nil)
@@ -252,6 +301,31 @@ module RBLE
         return {} unless data.is_a?(Hash)
 
         data.transform_values { |bytes| bytes.is_a?(Array) ? bytes : [] }
+      end
+
+      # Build Service hashes from subprocess discover_services result
+      # @param raw_services [Array] Raw service data from subprocess
+      # @param device_identifier [String] Device UUID
+      # @return [Array<Hash>] Services with characteristics and paths
+      def build_services_from_result(raw_services, device_identifier)
+        (raw_services || []).map do |service_data|
+          characteristics = (service_data['characteristics'] || []).map do |char_data|
+            {
+              data: Characteristic.new(
+                uuid: char_data['uuid'],
+                flags: char_data['properties'] || [],
+                service_uuid: service_data['uuid']
+              ),
+              path: "#{device_identifier}:#{service_data['uuid']}:#{char_data['uuid']}"
+            }
+          end
+
+          {
+            uuid: service_data['uuid'],
+            primary: service_data['primary'] != false,
+            characteristics: characteristics
+          }
+        end
       end
 
       def handle_response_error(response)
