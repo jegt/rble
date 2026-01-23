@@ -66,8 +66,8 @@ module RBLE
 
   # Raised when operation requires an active connection
   class NotConnectedError < ConnectionError
-    def initialize
-      super('Device is not connected. Call connect() before performing this operation.')
+    def initialize(msg = nil)
+      super(msg || 'Connection lost. Create a new connection with RBLE.connect()')
     end
   end
 
