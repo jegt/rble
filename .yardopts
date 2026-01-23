@@ -1,0 +1,6 @@
+--readme README.md
+--charset UTF-8
+--markup markdown
+lib/**/*.rb
+- CHANGELOG.md
+- LICENSE.txt

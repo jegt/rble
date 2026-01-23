@@ -1,0 +1,23 @@
+# Generated documentation
+/doc/
+/.yardoc/
+
+# Gem build artifacts
+*.gem
+pkg/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# macOS
+.DS_Store
+
+# Ruby
+.bundle/
+Gemfile.lock
+
+# macOS BLE helper build artifacts
+/ext/macos_ble/.build/
