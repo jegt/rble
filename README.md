@@ -70,6 +70,26 @@ RBLE.scan(timeout: 5) do |device|
 end
 ```
 
+## Rake Tasks
+
+RBLE provides rake tasks for system checks and integration testing. Add to your Rakefile:
+
+```ruby
+require 'rble/tasks'
+```
+
+Then run:
+
+```bash
+# Check system BLE readiness (permissions, adapter, helper binary)
+rake rble:check
+
+# Run integration test with real BLE hardware
+rake test:integration
+```
+
+The `rble:check` task verifies your system is correctly configured for BLE operations and provides actionable suggestions for any issues found.
+
 ## Usage Examples
 
 ### Scanning for Devices
