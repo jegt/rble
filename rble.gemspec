@@ -19,7 +19,9 @@ Gem::Specification.new do |spec|
   spec.metadata['changelog_uri'] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata['rubygems_mfa_required'] = 'true'
 
-  spec.files = Dir['lib/**/*', 'LICENSE.txt', 'README.md']
+  # Include lib/ and ext/ but exclude build artifacts
+  spec.files = Dir['lib/**/*', 'LICENSE.txt', 'README.md'] +
+               Dir['ext/macos_ble/Package.swift', 'ext/macos_ble/Sources/**/*.swift']
   spec.require_paths = ['lib']
 
   # Runtime dependencies
