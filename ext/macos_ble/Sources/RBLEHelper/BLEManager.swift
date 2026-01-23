@@ -158,8 +158,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         advertisementData: [String: Any],
         rssi RSSI: NSNumber
     ) {
-        // Store discovered peripheral for later connection
-        discoveredPeripherals[peripheral.identifier.uuidString] = peripheral
+        // Store discovered peripheral for later connection (uppercase for consistent lookup)
+        discoveredPeripherals[peripheral.identifier.uuidString.uppercased()] = peripheral
 
         // Build device info dictionary
         var params: [String: AnyCodable] = [
@@ -216,7 +216,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     // MARK: - CBCentralManagerDelegate - Connection
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        let uuid = peripheral.identifier.uuidString
+        let uuid = peripheral.identifier.uuidString.uppercased()
         connectedPeripherals[uuid] = peripheral
         peripheral.delegate = self
 
@@ -231,14 +231,14 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        let uuid = peripheral.identifier.uuidString
+        let uuid = peripheral.identifier.uuidString.uppercased()
         if let completion = pendingConnections.removeValue(forKey: uuid) {
             completion(.failure(error ?? BLEError.connectionFailed))
         }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        let uuid = peripheral.identifier.uuidString
+        let uuid = peripheral.identifier.uuidString.uppercased()
         connectedPeripherals.removeValue(forKey: uuid)
 
         if let completion = pendingDisconnects.removeValue(forKey: uuid) {
@@ -259,7 +259,9 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     ///   - uuid: The peripheral's UUID string
     ///   - completion: Callback with success/failure result
     func connect(uuid: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard let peripheral = discoveredPeripherals[uuid] else {
+        // Normalize UUID to uppercase for consistent lookup
+        let normalizedUUID = uuid.uppercased()
+        guard let peripheral = discoveredPeripherals[normalizedUUID] else {
             completion(.failure(BLEError.deviceNotFound))
             return
         }
@@ -269,7 +271,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
             return
         }
 
-        pendingConnections[uuid] = completion
+        pendingConnections[normalizedUUID] = completion
         centralManager.connect(peripheral, options: nil)
     }
 
@@ -278,12 +280,13 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     ///   - uuid: The peripheral's UUID string
     ///   - completion: Callback when disconnection completes
     func disconnect(uuid: String, completion: @escaping () -> Void) {
-        guard let peripheral = connectedPeripherals[uuid] else {
+        let normalizedUUID = uuid.uppercased()
+        guard let peripheral = connectedPeripherals[normalizedUUID] else {
             completion()
             return
         }
 
-        pendingDisconnects[uuid] = completion
+        pendingDisconnects[normalizedUUID] = completion
         centralManager.cancelPeripheralConnection(peripheral)
     }
 
@@ -291,7 +294,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     /// - Parameter uuid: The peripheral's UUID string
     /// - Returns: True if connected
     func isConnected(uuid: String) -> Bool {
-        return connectedPeripherals[uuid] != nil
+        return connectedPeripherals[uuid.uppercased()] != nil
     }
 
     // MARK: - GATT Operations
@@ -313,7 +316,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     ///   - charUUID: The characteristic UUID (short or full)
     /// - Returns: The CBCharacteristic if found, nil otherwise
     func findCharacteristic(deviceUUID: String, serviceUUID: String, charUUID: String) -> CBCharacteristic? {
-        guard let peripheral = connectedPeripherals[deviceUUID],
+        let normalizedDeviceUUID = deviceUUID.uppercased()
+        guard let peripheral = connectedPeripherals[normalizedDeviceUUID],
               let services = peripheral.services else {
             return nil
         }
@@ -345,7 +349,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         charUUID: String,
         completion: @escaping (Result<Data, Error>) -> Void
     ) {
-        guard let peripheral = connectedPeripherals[deviceUUID] else {
+        let normalizedDeviceUUID = deviceUUID.uppercased()
+        guard let peripheral = connectedPeripherals[normalizedDeviceUUID] else {
             completion(.failure(BLEError.notConnected))
             return
         }
@@ -359,7 +364,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
             return
         }
 
-        let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+        let key = "\(normalizedDeviceUUID):\(characteristic.uuid.uuidString.uppercased())"
         pendingReads[key] = completion
         peripheral.readValue(for: characteristic)
     }
@@ -380,7 +385,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         withResponse: Bool,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        guard let peripheral = connectedPeripherals[deviceUUID] else {
+        let normalizedDeviceUUID = deviceUUID.uppercased()
+        guard let peripheral = connectedPeripherals[normalizedDeviceUUID] else {
             completion(.failure(BLEError.notConnected))
             return
         }
@@ -397,7 +403,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         let writeType: CBCharacteristicWriteType = withResponse ? .withResponse : .withoutResponse
 
         if withResponse {
-            let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+            let key = "\(normalizedDeviceUUID):\(characteristic.uuid.uuidString.uppercased())"
             pendingWrites[key] = completion
         }
 
@@ -421,7 +427,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         charUUID: String,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        guard let peripheral = connectedPeripherals[deviceUUID] else {
+        let normalizedDeviceUUID = deviceUUID.uppercased()
+        guard let peripheral = connectedPeripherals[normalizedDeviceUUID] else {
             completion(.failure(BLEError.notConnected))
             return
         }
@@ -435,7 +442,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
             return
         }
 
-        let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+        let key = "\(normalizedDeviceUUID):\(characteristic.uuid.uuidString.uppercased())"
         subscriptions.insert(key)
 
         // setNotifyValue completion comes via didUpdateNotificationState
@@ -453,7 +460,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         serviceUUID: String,
         charUUID: String
     ) {
-        guard let peripheral = connectedPeripherals[deviceUUID],
+        let normalizedDeviceUUID = deviceUUID.uppercased()
+        guard let peripheral = connectedPeripherals[normalizedDeviceUUID],
               let characteristic = findCharacteristic(
                   deviceUUID: deviceUUID,
                   serviceUUID: serviceUUID,
@@ -462,7 +470,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
             return
         }
 
-        let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+        let key = "\(normalizedDeviceUUID):\(characteristic.uuid.uuidString.uppercased())"
         subscriptions.remove(key)
         peripheral.setNotifyValue(false, for: characteristic)
     }
@@ -474,12 +482,13 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     ///   - uuid: The peripheral's UUID string
     ///   - completion: Callback with success/failure result
     func discoverServices(uuid: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard let peripheral = connectedPeripherals[uuid] else {
+        let normalizedUUID = uuid.uppercased()
+        guard let peripheral = connectedPeripherals[normalizedUUID] else {
             completion(.failure(BLEError.notConnected))
             return
         }
 
-        pendingServiceDiscovery[uuid] = completion
+        pendingServiceDiscovery[normalizedUUID] = completion
         peripheral.discoverServices(nil) // Discover all services
     }
 
@@ -487,7 +496,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     /// - Parameter uuid: The peripheral's UUID string
     /// - Returns: Array of service dictionaries with nested characteristics, or nil if not found
     func getServices(uuid: String) -> [[String: Any]]? {
-        guard let peripheral = connectedPeripherals[uuid],
+        let normalizedUUID = uuid.uppercased()
+        guard let peripheral = connectedPeripherals[normalizedUUID],
               let services = peripheral.services else {
             return nil
         }
@@ -530,7 +540,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
 
 extension BLEManager: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        let uuid = peripheral.identifier.uuidString
+        let uuid = peripheral.identifier.uuidString.uppercased()
 
         if let error = error {
             if let completion = pendingServiceDiscovery.removeValue(forKey: uuid) {
@@ -556,7 +566,7 @@ extension BLEManager: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        let uuid = peripheral.identifier.uuidString
+        let uuid = peripheral.identifier.uuidString.uppercased()
 
         // Decrement pending count
         if var remaining = pendingCharacteristicDiscovery[uuid] {
@@ -576,8 +586,9 @@ extension BLEManager: CBPeripheralDelegate {
     // MARK: - GATT Operation Callbacks
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        let deviceUUID = peripheral.identifier.uuidString
-        let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+        let deviceUUID = peripheral.identifier.uuidString.uppercased()
+        let charUUID = characteristic.uuid.uuidString.uppercased()
+        let key = "\(deviceUUID):\(charUUID)"
 
         // Check if this is a read response
         if let completion = pendingReads.removeValue(forKey: key) {
@@ -598,8 +609,8 @@ extension BLEManager: CBPeripheralDelegate {
                 method: "notification",
                 params: [
                     "device_uuid": AnyCodable(deviceUUID),
-                    "service_uuid": AnyCodable(characteristic.service?.uuid.uuidString ?? ""),
-                    "char_uuid": AnyCodable(characteristic.uuid.uuidString),
+                    "service_uuid": AnyCodable(characteristic.service?.uuid.uuidString.uppercased() ?? ""),
+                    "char_uuid": AnyCodable(charUUID),
                     "value": AnyCodable(Array(value).map { Int($0) })
                 ]
             )
@@ -608,7 +619,7 @@ extension BLEManager: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        let key = "\(peripheral.identifier.uuidString):\(characteristic.uuid.uuidString)"
+        let key = "\(peripheral.identifier.uuidString.uppercased()):\(characteristic.uuid.uuidString.uppercased())"
         if let completion = pendingWrites.removeValue(forKey: key) {
             if let error = error {
                 completion(.failure(error))
@@ -619,7 +630,7 @@ extension BLEManager: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        let key = "\(peripheral.identifier.uuidString):\(characteristic.uuid.uuidString)"
+        let key = "\(peripheral.identifier.uuidString.uppercased()):\(characteristic.uuid.uuidString.uppercased())"
         if let completion = pendingWrites.removeValue(forKey: key) {
             if let error = error {
                 completion(.failure(error))
