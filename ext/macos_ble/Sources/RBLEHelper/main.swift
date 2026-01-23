@@ -60,7 +60,9 @@ func createParseErrorResponse() -> Response {
 // MARK: - Request Handlers
 
 /// Handle a parsed request and return a response
-func handleRequest(_ request: Request) -> Response {
+/// For sync methods, returns a Response directly
+/// For async methods, returns nil and calls writeResponse when complete
+func handleRequest(_ request: Request) -> Response? {
     switch request.method {
     case "adapters":
         return handleAdapters(request)
@@ -68,6 +70,15 @@ func handleRequest(_ request: Request) -> Response {
         return handleScanStart(request)
     case "scan_stop":
         return handleScanStop(request)
+    case "connect":
+        handleConnect(request)
+        return nil // Response sent asynchronously
+    case "disconnect":
+        handleDisconnect(request)
+        return nil // Response sent asynchronously
+    case "discover_services":
+        handleDiscoverServices(request)
+        return nil // Response sent asynchronously
     default:
         return Response.error(
             id: request.id,
@@ -136,6 +147,172 @@ func handleScanStop(_ request: Request) -> Response {
     )
 }
 
+// MARK: - Async Request Handlers (Connection and Service Discovery)
+
+/// Handle the "connect" method - connects to a peripheral
+/// Required params:
+///   - uuid: The peripheral's UUID string (must have been discovered first)
+/// Optional params:
+///   - timeout: Connection timeout in seconds (default: 30)
+func handleConnect(_ request: Request) {
+    guard let uuid = request.params?["uuid"]?.value as? String else {
+        writeResponse(Response.error(
+            id: request.id,
+            code: ErrorCode.invalidParams,
+            message: "Missing required param: uuid"
+        ))
+        return
+    }
+
+    let timeout = request.params?["timeout"]?.value as? Int ?? 30
+
+    // Track timeout
+    var timedOut = false
+    let timeoutWorkItem = DispatchWorkItem {
+        timedOut = true
+        writeResponse(Response.error(
+            id: request.id,
+            code: BLEErrorCode.timeout,
+            message: "Connection timeout"
+        ))
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(timeout), execute: timeoutWorkItem)
+
+    bleManager.connect(uuid: uuid) { result in
+        // Cancel timeout if we got a result
+        timeoutWorkItem.cancel()
+        guard !timedOut else { return }
+
+        switch result {
+        case .success:
+            writeResponse(Response.success(
+                id: request.id,
+                result: ["status": AnyCodable("connected")]
+            ))
+        case .failure(let error):
+            let code: Int
+            if let bleError = error as? BLEError {
+                switch bleError {
+                case .deviceNotFound: code = BLEErrorCode.deviceNotFound
+                case .notPoweredOn: code = BLEErrorCode.notPoweredOn
+                case .connectionFailed: code = BLEErrorCode.connectionFailed
+                default: code = BLEErrorCode.operationFailed
+                }
+            } else {
+                code = BLEErrorCode.operationFailed
+            }
+            writeResponse(Response.error(
+                id: request.id,
+                code: code,
+                message: error.localizedDescription
+            ))
+        }
+    }
+}
+
+/// Handle the "disconnect" method - disconnects from a peripheral
+/// Required params:
+///   - uuid: The peripheral's UUID string
+func handleDisconnect(_ request: Request) {
+    guard let uuid = request.params?["uuid"]?.value as? String else {
+        writeResponse(Response.error(
+            id: request.id,
+            code: ErrorCode.invalidParams,
+            message: "Missing required param: uuid"
+        ))
+        return
+    }
+
+    // Disconnect with a short timeout (5 seconds)
+    var timedOut = false
+    let timeoutWorkItem = DispatchWorkItem {
+        timedOut = true
+        // Even if timeout, respond with disconnected since we initiated the disconnect
+        writeResponse(Response.success(
+            id: request.id,
+            result: ["status": AnyCodable("disconnected")]
+        ))
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(5), execute: timeoutWorkItem)
+
+    bleManager.disconnect(uuid: uuid) {
+        timeoutWorkItem.cancel()
+        guard !timedOut else { return }
+
+        writeResponse(Response.success(
+            id: request.id,
+            result: ["status": AnyCodable("disconnected")]
+        ))
+    }
+}
+
+/// Handle the "discover_services" method - discovers services and characteristics
+/// Required params:
+///   - uuid: The peripheral's UUID string (must be connected)
+/// Optional params:
+///   - timeout: Discovery timeout in seconds (default: 30)
+func handleDiscoverServices(_ request: Request) {
+    guard let uuid = request.params?["uuid"]?.value as? String else {
+        writeResponse(Response.error(
+            id: request.id,
+            code: ErrorCode.invalidParams,
+            message: "Missing required param: uuid"
+        ))
+        return
+    }
+
+    let timeout = request.params?["timeout"]?.value as? Int ?? 30
+
+    // Track timeout
+    var timedOut = false
+    let timeoutWorkItem = DispatchWorkItem {
+        timedOut = true
+        writeResponse(Response.error(
+            id: request.id,
+            code: BLEErrorCode.timeout,
+            message: "Service discovery timeout"
+        ))
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(timeout), execute: timeoutWorkItem)
+
+    bleManager.discoverServices(uuid: uuid) { result in
+        timeoutWorkItem.cancel()
+        guard !timedOut else { return }
+
+        switch result {
+        case .success:
+            if let services = bleManager.getServices(uuid: uuid) {
+                writeResponse(Response.success(
+                    id: request.id,
+                    result: ["services": AnyCodable(services)]
+                ))
+            } else {
+                writeResponse(Response.error(
+                    id: request.id,
+                    code: BLEErrorCode.serviceDiscoveryFailed,
+                    message: "No services found"
+                ))
+            }
+        case .failure(let error):
+            let code: Int
+            if let bleError = error as? BLEError {
+                switch bleError {
+                case .notConnected: code = BLEErrorCode.notConnected
+                case .serviceDiscoveryFailed: code = BLEErrorCode.serviceDiscoveryFailed
+                default: code = BLEErrorCode.operationFailed
+                }
+            } else {
+                code = BLEErrorCode.operationFailed
+            }
+            writeResponse(Response.error(
+                id: request.id,
+                code: code,
+                message: error.localizedDescription
+            ))
+        }
+    }
+}
+
 // MARK: - Main Entry Point
 
 func main() {
@@ -171,8 +348,11 @@ func main() {
 
                 // Handle request on main queue for thread safety with CoreBluetooth
                 DispatchQueue.main.async {
-                    let response = handleRequest(request)
-                    writeResponse(response)
+                    if let response = handleRequest(request) {
+                        // Sync response - write immediately
+                        writeResponse(response)
+                    }
+                    // Async responses (nil) are written by their handlers
                 }
 
             } catch {
