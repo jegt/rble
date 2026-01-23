@@ -272,8 +272,13 @@ module RBLE
       # @param char_path [String] D-Bus characteristic path
       # @param timeout [Numeric] Read timeout in seconds (currently unused - D-Bus handles timeout)
       # @return [String] Binary string (ASCII-8BIT encoding)
+      # @raise [NotConnectedError] if device is not connected
       # @raise [ReadError] if read fails
       def read_characteristic(char_path, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
+        # Check connection before attempting read
+        device_path = extract_device_path(char_path)
+        raise NotConnectedError unless device_path && @connected_devices.key?(device_path)
+
         conn = ensure_connection
         wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
 
@@ -283,6 +288,11 @@ module RBLE
         # Convert byte array to binary string
         result.map(&:to_i).pack('C*')
       rescue DBus::Error => e
+        # Check if disconnect related - handle unexpected disconnect
+        if e.name == 'org.bluez.Error.NotConnected'
+          handle_unexpected_disconnect(device_path) if device_path
+          raise NotConnectedError
+        end
         raise ReadError, translate_dbus_error(e)
       end
 
@@ -292,8 +302,13 @@ module RBLE
       # @param response [Boolean] Wait for write response (true = 'request', false = 'command')
       # @param timeout [Numeric] Write timeout in seconds (currently unused - D-Bus handles timeout)
       # @return [Boolean] true on success
+      # @raise [NotConnectedError] if device is not connected
       # @raise [WriteError] if write fails
       def write_characteristic(char_path, data, response: true, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
+        # Check connection before attempting write
+        device_path = extract_device_path(char_path)
+        raise NotConnectedError unless device_path && @connected_devices.key?(device_path)
+
         conn = ensure_connection
         wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
 
@@ -310,6 +325,11 @@ module RBLE
         wrapper.write_value(bytes, options)
         true
       rescue DBus::Error => e
+        # Check if disconnect related - handle unexpected disconnect
+        if e.name == 'org.bluez.Error.NotConnected'
+          handle_unexpected_disconnect(device_path) if device_path
+          raise NotConnectedError
+        end
         raise WriteError, translate_dbus_error(e)
       end
 
@@ -317,10 +337,15 @@ module RBLE
       # @param char_path [String] D-Bus characteristic path
       # @yield [String] Called with value (binary string) on each notification
       # @return [Boolean] true on success
+      # @raise [NotConnectedError] if device is not connected
       # @raise [NotifyError] if subscription fails
       def subscribe_characteristic(char_path, &callback)
         # Already subscribed - return early
         return true if @subscriptions.key?(char_path)
+
+        # Check connection before attempting subscribe
+        device_path = extract_device_path(char_path)
+        raise NotConnectedError unless device_path && @connected_devices.key?(device_path)
 
         conn = ensure_connection
         wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
@@ -345,20 +370,35 @@ module RBLE
         @subscriptions[char_path] = { callback: callback, wrapper: wrapper }
         true
       rescue DBus::Error => e
+        # Check if disconnect related - handle unexpected disconnect
+        if e.name == 'org.bluez.Error.NotConnected'
+          handle_unexpected_disconnect(device_path) if device_path
+          raise NotConnectedError
+        end
         raise NotifyError, translate_dbus_error(e)
       end
 
       # Unsubscribe from characteristic notifications
       # @param char_path [String] D-Bus characteristic path
       # @return [Boolean] true on success
+      # @raise [NotConnectedError] if device is not connected
       def unsubscribe_characteristic(char_path)
         subscription = @subscriptions.delete(char_path)
         return true unless subscription
 
+        # Check connection before attempting unsubscribe
+        device_path = extract_device_path(char_path)
+        raise NotConnectedError unless device_path && @connected_devices.key?(device_path)
+
         begin
           subscription[:wrapper].stop_notify
-        rescue DBus::Error
-          # Ignore errors during cleanup - device may already be disconnected
+        rescue DBus::Error => e
+          # Check if disconnect related - handle unexpected disconnect
+          if e.name == 'org.bluez.Error.NotConnected'
+            handle_unexpected_disconnect(device_path) if device_path
+            raise NotConnectedError
+          end
+          # Ignore other errors during cleanup
         end
 
         true
@@ -389,6 +429,21 @@ module RBLE
 
         # Start monitoring event loop if not already running
         start_monitoring_loop(conn)
+      end
+
+      # Extract device path from characteristic path
+      # @param char_path [String] Characteristic path
+      #   Format: /org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX/serviceXXXX/charXXXX
+      # @return [String, nil] Device path or nil if not extractable
+      def extract_device_path(char_path)
+        return nil unless char_path
+
+        # Find the device portion (ends at /service)
+        parts = char_path.split('/')
+        device_index = parts.index { |p| p.start_with?('dev_') }
+        return nil unless device_index
+
+        parts[0..device_index].join('/')
       end
 
       # Handle unexpected disconnect detected via PropertiesChanged signal
