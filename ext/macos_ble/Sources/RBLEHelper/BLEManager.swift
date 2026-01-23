@@ -21,6 +21,11 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     private var pendingServiceDiscovery: [String: (Result<Void, Error>) -> Void] = [:]
     private var pendingCharacteristicDiscovery: [String: Int] = [:] // UUID -> remaining services
 
+    // GATT operation tracking
+    private var pendingReads: [String: (Result<Data, Error>) -> Void] = [:] // deviceUUID:charUUID -> completion
+    private var pendingWrites: [String: (Result<Void, Error>) -> Void] = [:]
+    private var subscriptions: Set<String> = [] // deviceUUID:charUUID
+
     /// Callback to send events to stdout
     var onEvent: ((Event) -> Void)?
 
@@ -235,6 +240,179 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         return connectedPeripherals[uuid] != nil
     }
 
+    // MARK: - GATT Operations
+
+    /// Normalize a UUID, converting 4-character short UUIDs to full 128-bit format
+    /// - Parameter uuid: The UUID string (either 4-char short or full 128-bit)
+    /// - Returns: The full 128-bit UUID string
+    private func normalizeUUID(_ uuid: String) -> String {
+        if uuid.count == 4 {
+            return "0000\(uuid.uppercased())-0000-1000-8000-00805F9B34FB"
+        }
+        return uuid.uppercased()
+    }
+
+    /// Find a characteristic by device, service, and characteristic UUIDs
+    /// - Parameters:
+    ///   - deviceUUID: The peripheral's UUID string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    /// - Returns: The CBCharacteristic if found, nil otherwise
+    func findCharacteristic(deviceUUID: String, serviceUUID: String, charUUID: String) -> CBCharacteristic? {
+        guard let peripheral = connectedPeripherals[deviceUUID],
+              let services = peripheral.services else {
+            return nil
+        }
+
+        // Find service (support both full and short UUID)
+        let normalizedServiceUUID = normalizeUUID(serviceUUID)
+        guard let service = services.first(where: {
+            $0.uuid.uuidString.uppercased() == normalizedServiceUUID
+        }) else {
+            return nil
+        }
+
+        // Find characteristic
+        let normalizedCharUUID = normalizeUUID(charUUID)
+        return service.characteristics?.first(where: {
+            $0.uuid.uuidString.uppercased() == normalizedCharUUID
+        })
+    }
+
+    /// Read a characteristic value
+    /// - Parameters:
+    ///   - deviceUUID: The peripheral's UUID string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    ///   - completion: Callback with the read data or error
+    func readCharacteristic(
+        deviceUUID: String,
+        serviceUUID: String,
+        charUUID: String,
+        completion: @escaping (Result<Data, Error>) -> Void
+    ) {
+        guard let peripheral = connectedPeripherals[deviceUUID] else {
+            completion(.failure(BLEError.notConnected))
+            return
+        }
+
+        guard let characteristic = findCharacteristic(
+            deviceUUID: deviceUUID,
+            serviceUUID: serviceUUID,
+            charUUID: charUUID
+        ) else {
+            completion(.failure(BLEError.characteristicNotFound))
+            return
+        }
+
+        let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+        pendingReads[key] = completion
+        peripheral.readValue(for: characteristic)
+    }
+
+    /// Write a value to a characteristic
+    /// - Parameters:
+    ///   - deviceUUID: The peripheral's UUID string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    ///   - data: The data to write
+    ///   - withResponse: Whether to request a write response from the peripheral
+    ///   - completion: Callback with success or error
+    func writeCharacteristic(
+        deviceUUID: String,
+        serviceUUID: String,
+        charUUID: String,
+        data: Data,
+        withResponse: Bool,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        guard let peripheral = connectedPeripherals[deviceUUID] else {
+            completion(.failure(BLEError.notConnected))
+            return
+        }
+
+        guard let characteristic = findCharacteristic(
+            deviceUUID: deviceUUID,
+            serviceUUID: serviceUUID,
+            charUUID: charUUID
+        ) else {
+            completion(.failure(BLEError.characteristicNotFound))
+            return
+        }
+
+        let writeType: CBCharacteristicWriteType = withResponse ? .withResponse : .withoutResponse
+
+        if withResponse {
+            let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+            pendingWrites[key] = completion
+        }
+
+        peripheral.writeValue(data, for: characteristic, type: writeType)
+
+        if !withResponse {
+            // No response expected, complete immediately
+            completion(.success(()))
+        }
+    }
+
+    /// Subscribe to notifications for a characteristic
+    /// - Parameters:
+    ///   - deviceUUID: The peripheral's UUID string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    ///   - completion: Callback when subscription is confirmed or fails
+    func subscribe(
+        deviceUUID: String,
+        serviceUUID: String,
+        charUUID: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        guard let peripheral = connectedPeripherals[deviceUUID] else {
+            completion(.failure(BLEError.notConnected))
+            return
+        }
+
+        guard let characteristic = findCharacteristic(
+            deviceUUID: deviceUUID,
+            serviceUUID: serviceUUID,
+            charUUID: charUUID
+        ) else {
+            completion(.failure(BLEError.characteristicNotFound))
+            return
+        }
+
+        let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+        subscriptions.insert(key)
+
+        // setNotifyValue completion comes via didUpdateNotificationState
+        pendingWrites[key] = completion
+        peripheral.setNotifyValue(true, for: characteristic)
+    }
+
+    /// Unsubscribe from notifications for a characteristic
+    /// - Parameters:
+    ///   - deviceUUID: The peripheral's UUID string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    func unsubscribe(
+        deviceUUID: String,
+        serviceUUID: String,
+        charUUID: String
+    ) {
+        guard let peripheral = connectedPeripherals[deviceUUID],
+              let characteristic = findCharacteristic(
+                  deviceUUID: deviceUUID,
+                  serviceUUID: serviceUUID,
+                  charUUID: charUUID
+              ) else {
+            return
+        }
+
+        let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+        subscriptions.remove(key)
+        peripheral.setNotifyValue(false, for: characteristic)
+    }
+
     // MARK: - Service Discovery Methods
 
     /// Discover services for a connected peripheral
@@ -340,6 +518,62 @@ extension BLEManager: CBPeripheralDelegate {
             }
         }
     }
+
+    // MARK: - GATT Operation Callbacks
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        let deviceUUID = peripheral.identifier.uuidString
+        let key = "\(deviceUUID):\(characteristic.uuid.uuidString)"
+
+        // Check if this is a read response
+        if let completion = pendingReads.removeValue(forKey: key) {
+            if let error = error {
+                completion(.failure(error))
+            } else if let value = characteristic.value {
+                completion(.success(value))
+            } else {
+                completion(.success(Data()))
+            }
+            return
+        }
+
+        // Otherwise it's a notification
+        if subscriptions.contains(key) {
+            let value = characteristic.value ?? Data()
+            let event = Event(
+                method: "notification",
+                params: [
+                    "device_uuid": AnyCodable(deviceUUID),
+                    "service_uuid": AnyCodable(characteristic.service?.uuid.uuidString ?? ""),
+                    "char_uuid": AnyCodable(characteristic.uuid.uuidString),
+                    "value": AnyCodable(Array(value).map { Int($0) })
+                ]
+            )
+            onEvent?(event)
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        let key = "\(peripheral.identifier.uuidString):\(characteristic.uuid.uuidString)"
+        if let completion = pendingWrites.removeValue(forKey: key) {
+            if let error = error {
+                completion(.failure(error))
+            } else {
+                completion(.success(()))
+            }
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        let key = "\(peripheral.identifier.uuidString):\(characteristic.uuid.uuidString)"
+        if let completion = pendingWrites.removeValue(forKey: key) {
+            if let error = error {
+                completion(.failure(error))
+            } else {
+                completion(.success(()))
+            }
+        }
+    }
 }
 
 // MARK: - BLE Errors
@@ -353,6 +587,7 @@ enum BLEError: Error {
     case deviceNotFound
     case connectionFailed
     case serviceDiscoveryFailed
+    case characteristicNotFound
 
     var localizedDescription: String {
         switch self {
@@ -370,6 +605,8 @@ enum BLEError: Error {
             return "Connection failed"
         case .serviceDiscoveryFailed:
             return "Service discovery failed"
+        case .characteristicNotFound:
+            return "Characteristic not found"
         }
     }
 }
@@ -386,4 +623,5 @@ enum BLEErrorCode {
     static let deviceNotFound = -6
     static let connectionFailed = -7
     static let serviceDiscoveryFailed = -8
+    static let characteristicNotFound = -9
 }
