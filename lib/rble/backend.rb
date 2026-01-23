@@ -13,7 +13,8 @@ module RBLE
         require_relative 'backend/bluez'
         BlueZ.new
       when /darwin/
-        raise Error, 'macOS support not yet implemented'
+        require_relative 'backend/corebluetooth'
+        CoreBluetooth.new
       else
         raise Error, "Unsupported platform: #{RUBY_PLATFORM}"
       end
