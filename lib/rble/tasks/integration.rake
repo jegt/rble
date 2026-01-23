@@ -23,7 +23,7 @@ module RBLE
     DEVICE_INFO_SERVICE = '180a'
     MANUFACTURER_NAME = '2a29'
     MODEL_NUMBER = '2a24'
-    SCAN_TIMEOUT = 15
+    SCAN_TIMEOUT = 5
     CONNECTION_TIMEOUT = 10
 
     def initialize
