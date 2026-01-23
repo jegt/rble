@@ -13,3 +13,25 @@ Layout/LineLength:
 Metrics/ParameterLists:
   Exclude:
     - 'lib/rble/device.rb'
+
+# BlueZ backend is a complex D-Bus integration with many necessary methods
+Metrics/ClassLength:
+  Exclude:
+    - 'lib/rble/backend/bluez.rb'
+
+Metrics/MethodLength:
+  Exclude:
+    - 'lib/rble/backend/bluez.rb'
+
+Metrics/AbcSize:
+  Exclude:
+    - 'lib/rble/backend/bluez.rb'
+
+Metrics/CyclomaticComplexity:
+  Exclude:
+    - 'lib/rble/backend/bluez.rb'
+
+# initialize doesn't need super when parent (Base) has no state
+Lint/MissingSuper:
+  Exclude:
+    - 'lib/rble/backend/bluez.rb'

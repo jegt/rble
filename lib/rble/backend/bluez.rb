@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "../bluez"
+require_relative '../bluez'
 
 module RBLE
   module Backend
@@ -12,9 +12,13 @@ module RBLE
         @event_loop = nil
         @scanning = false
         @scan_callback = nil
-        @known_devices = {}  # path => Device
+        @known_devices = {} # path => Device
         @allow_duplicates = false
         @signal_handlers = []
+
+        # Connection tracking
+        @connected_devices = {}  # device_path => BlueZ::Device
+        @device_services = {}    # device_path => [Service, ...]
       end
 
       # Start scanning for BLE devices
@@ -24,7 +28,7 @@ module RBLE
       # @yield [Device] Called when device discovered/updated
       def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, &block)
         raise ScanInProgressError if @scanning
-        raise ArgumentError, "Block required for scan callback" unless block_given?
+        raise ArgumentError, 'Block required for scan callback' unless block_given?
 
         @scan_callback = block
         @allow_duplicates = allow_duplicates
@@ -43,7 +47,7 @@ module RBLE
 
           # Start event processing
           @event_loop.start(@connection.bus)
-        rescue
+        rescue StandardError
           cleanup
           raise
         end
@@ -55,7 +59,7 @@ module RBLE
 
         begin
           @adapter&.stop_discovery
-        rescue
+        rescue StandardError
           # Ignore errors during cleanup
         end
 
@@ -77,16 +81,16 @@ module RBLE
         om = conn.object_manager
         managed = om.GetManagedObjects.first
 
-        adapters = managed.select { |path, ifaces| ifaces.key?(RBLE::BlueZ::ADAPTER_INTERFACE) }
+        adapters = managed.select { |_path, ifaces| ifaces.key?(RBLE::BlueZ::ADAPTER_INTERFACE) }
         adapters.map do |path, ifaces|
           props = ifaces[RBLE::BlueZ::ADAPTER_INTERFACE]
           {
-            name: path.split("/").last,
-            address: props["Address"],
-            powered: props["Powered"]
+            name: path.split('/').last,
+            address: props['Address'],
+            powered: props['Powered']
           }
         end
-      rescue => e
+      rescue StandardError => e
         raise Error, "Failed to list adapters: #{e.message}"
       ensure
         conn&.disconnect
@@ -103,6 +107,137 @@ module RBLE
         end
       end
 
+      # Connect to a BLE device
+      # @param device_path [String] D-Bus device path
+      # @param timeout [Numeric] Connection timeout in seconds (default: 30)
+      # @return [Boolean] true on successful connection
+      # @raise [AlreadyConnectedError] if device is already connected
+      # @raise [ConnectionTimeoutError] if connection times out
+      # @raise [ConnectionError] on other connection failures
+      def connect_device(device_path, timeout: 30)
+        # Check if already connected
+        raise AlreadyConnectedError if @connected_devices.key?(device_path)
+
+        # Create BlueZ::Device wrapper
+        conn = ensure_connection
+        device = RBLE::BlueZ::Device.new(conn, device_path)
+
+        # Check if already connected at BlueZ level
+        if device.connected?
+          @connected_devices[device_path] = device
+          return true
+        end
+
+        # Setup event loop for connection state tracking
+        event_loop = setup_connection_event_loop(conn, device_path)
+
+        begin
+          # Initiate connection (async D-Bus call)
+          device.connect
+
+          # Wait for Connected = true via PropertiesChanged
+          wait_for_property(event_loop, device_path, 'Connected', true, timeout)
+
+          # Store connected device
+          @connected_devices[device_path] = device
+          true
+        rescue ConnectionTimeoutError
+          # Cleanup on timeout
+          cleanup_connection_event_loop(event_loop)
+          raise
+        rescue DBus::Error => e
+          cleanup_connection_event_loop(event_loop)
+          raise ConnectionError, "Failed to connect: #{e.message}"
+        ensure
+          # Stop the event loop if still running
+          cleanup_connection_event_loop(event_loop)
+        end
+      end
+
+      # Disconnect from a BLE device
+      # @param device_path [String] D-Bus device path
+      # @return [void]
+      def disconnect_device(device_path)
+        device = @connected_devices.delete(device_path)
+        return unless device
+
+        # Clear cached services
+        @device_services.delete(device_path)
+
+        begin
+          # Disconnect (no need to wait for confirmation - fire and forget)
+          device.disconnect
+        rescue DBus::Error
+          # Ignore errors during cleanup - device may already be disconnected
+        end
+      end
+
+      # Discover GATT services on a connected device
+      # @param device_path [String] D-Bus device path
+      # @param timeout [Numeric] Discovery timeout in seconds (default: 30)
+      # @return [Array<Service>] Discovered services with characteristics
+      # @raise [NotConnectedError] if device is not connected
+      # @raise [ServiceDiscoveryError] if discovery fails
+      def discover_services(device_path, timeout: 30)
+        device = @connected_devices[device_path]
+        raise NotConnectedError unless device
+
+        # Return cached services if available
+        return @device_services[device_path] if @device_services.key?(device_path)
+
+        # Check if services already resolved
+        unless device.services_resolved?
+          # Setup event loop for waiting on ServicesResolved
+          conn = ensure_connection
+          event_loop = setup_connection_event_loop(conn, device_path)
+
+          begin
+            wait_for_property(event_loop, device_path, 'ServicesResolved', true, timeout)
+          rescue ConnectionTimeoutError
+            cleanup_connection_event_loop(event_loop)
+            raise ServiceDiscoveryError, "Service discovery timed out after #{timeout} seconds"
+          ensure
+            cleanup_connection_event_loop(event_loop)
+          end
+        end
+
+        # Enumerate services and characteristics
+        services = enumerate_services(device_path)
+        @device_services[device_path] = services
+        services
+      end
+
+      # Get the device D-Bus path for a given MAC address
+      # @param address [String] Device MAC address (e.g., "AA:BB:CC:DD:EE:FF")
+      # @param adapter [String, nil] Specific adapter name (e.g., "hci0")
+      # @return [String, nil] Device path or nil if not found
+      def device_path_for_address(address, adapter: nil)
+        conn = ensure_connection
+        om = conn.object_manager
+        managed = om.GetManagedObjects.first
+
+        # Normalize address for comparison
+        normalized = address.upcase
+
+        # Find device by address
+        managed.each do |path, interfaces|
+          next unless interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE)
+
+          # Filter by adapter if specified
+          if adapter
+            adapter_path = "/org/bluez/#{adapter}"
+            next unless path.start_with?(adapter_path)
+          end
+
+          device_props = interfaces[RBLE::BlueZ::DEVICE_INTERFACE]
+          device_address = device_props['Address']&.upcase
+
+          return path if device_address == normalized
+        end
+
+        nil
+      end
+
       private
 
       def setup_connection
@@ -112,18 +247,19 @@ module RBLE
 
       def setup_adapter(adapter_name)
         adapter_path = if adapter_name
-          "/org/bluez/#{adapter_name}"
-        else
-          # Find first available adapter
-          om = @connection.object_manager
-          managed = om.GetManagedObjects.first
-          adapter_entry = managed.find { |path, ifaces| ifaces.key?(RBLE::BlueZ::ADAPTER_INTERFACE) }
-          raise AdapterNotFoundError unless adapter_entry
-          adapter_entry.first
-        end
+                         "/org/bluez/#{adapter_name}"
+                       else
+                         # Find first available adapter
+                         om = @connection.object_manager
+                         managed = om.GetManagedObjects.first
+                         adapter_entry = managed.find { |_path, ifaces| ifaces.key?(RBLE::BlueZ::ADAPTER_INTERFACE) }
+                         raise AdapterNotFoundError unless adapter_entry
+
+                         adapter_entry.first
+                       end
 
         @adapter = RBLE::BlueZ::Adapter.new(@connection, adapter_path)
-        raise AdapterDisabledError.new(@adapter.name) unless @adapter.powered?
+        raise AdapterDisabledError, @adapter.name unless @adapter.powered?
       end
 
       def setup_signal_handlers
@@ -133,14 +269,14 @@ module RBLE
         root = @connection.root_object
         object_manager = root[RBLE::BlueZ::OBJECT_MANAGER_INTERFACE]
 
-        object_manager.on_signal("InterfacesAdded") do |path, interfaces|
+        object_manager.on_signal('InterfacesAdded') do |path, interfaces|
           if interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE) && @event_loop
             @event_loop.enqueue(:device_found, path, interfaces[RBLE::BlueZ::DEVICE_INTERFACE])
           end
         end
         @signal_handlers << [:interfaces_added, object_manager]
 
-        object_manager.on_signal("InterfacesRemoved") do |path, interfaces|
+        object_manager.on_signal('InterfacesRemoved') do |path, interfaces|
           if interfaces.include?(RBLE::BlueZ::DEVICE_INTERFACE) && @event_loop
             @event_loop.enqueue(:device_removed, path, nil)
           end
@@ -149,19 +285,17 @@ module RBLE
       end
 
       def subscribe_to_device_properties(device_path)
-        begin
-          device_obj = @connection.object(device_path)
-          props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
+        device_obj = @connection.object(device_path)
+        props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
-          props_iface.on_signal("PropertiesChanged") do |interface, changed, invalidated|
-            if interface == RBLE::BlueZ::DEVICE_INTERFACE && @event_loop
-              @event_loop.enqueue(:properties_changed, device_path, changed)
-            end
+        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+          if interface == RBLE::BlueZ::DEVICE_INTERFACE && @event_loop
+            @event_loop.enqueue(:properties_changed, device_path, changed)
           end
-          @signal_handlers << [:properties_changed, props_iface, device_path]
-        rescue
-          # Device may have disappeared, ignore
         end
+        @signal_handlers << [:properties_changed, props_iface, device_path]
+      rescue StandardError
+        # Device may have disappeared, ignore
       end
 
       def start_discovery(service_uuids:, allow_duplicates:)
@@ -210,9 +344,9 @@ module RBLE
         subscribe_to_device_properties(path) if is_new
 
         # Callback if new device or allow_duplicates
-        if is_new || @allow_duplicates
-          @scan_callback&.call(device)
-        end
+        return unless is_new || @allow_duplicates
+
+        @scan_callback&.call(device)
       end
 
       def handle_device_removed(path)
@@ -237,36 +371,32 @@ module RBLE
 
       def build_device(path, properties)
         Device.new(
-          address: properties["Address"]&.upcase || extract_address_from_path(path),
-          name: properties["Name"],
-          rssi: properties["RSSI"],
-          manufacturer_data: parse_manufacturer_data(properties["ManufacturerData"]),
-          manufacturer_data_raw: parse_manufacturer_data_raw(properties["ManufacturerData"]),
-          service_data: parse_service_data(properties["ServiceData"]),
-          service_uuids: properties["UUIDs"] || [],
-          tx_power: properties["TxPower"],
-          address_type: properties["AddressType"] || "public"
+          address: properties['Address']&.upcase || extract_address_from_path(path),
+          name: properties['Name'],
+          rssi: properties['RSSI'],
+          manufacturer_data: parse_manufacturer_data(properties['ManufacturerData']),
+          manufacturer_data_raw: parse_manufacturer_data_raw(properties['ManufacturerData']),
+          service_data: parse_service_data(properties['ServiceData']),
+          service_uuids: properties['UUIDs'] || [],
+          tx_power: properties['TxPower'],
+          address_type: properties['AddressType'] || 'public'
         )
       end
 
       def parse_property_updates(changed)
         updates = {}
-        updates[:name] = changed["Name"] if changed.key?("Name")
-        updates[:rssi] = changed["RSSI"] if changed.key?("RSSI")
-        updates[:tx_power] = changed["TxPower"] if changed.key?("TxPower")
+        updates[:name] = changed['Name'] if changed.key?('Name')
+        updates[:rssi] = changed['RSSI'] if changed.key?('RSSI')
+        updates[:tx_power] = changed['TxPower'] if changed.key?('TxPower')
 
-        if changed.key?("ManufacturerData")
-          updates[:manufacturer_data] = parse_manufacturer_data(changed["ManufacturerData"])
-          updates[:manufacturer_data_raw] = parse_manufacturer_data_raw(changed["ManufacturerData"])
+        if changed.key?('ManufacturerData')
+          updates[:manufacturer_data] = parse_manufacturer_data(changed['ManufacturerData'])
+          updates[:manufacturer_data_raw] = parse_manufacturer_data_raw(changed['ManufacturerData'])
         end
 
-        if changed.key?("ServiceData")
-          updates[:service_data] = parse_service_data(changed["ServiceData"])
-        end
+        updates[:service_data] = parse_service_data(changed['ServiceData']) if changed.key?('ServiceData')
 
-        if changed.key?("UUIDs")
-          updates[:service_uuids] = changed["UUIDs"] || []
-        end
+        updates[:service_uuids] = changed['UUIDs'] || [] if changed.key?('UUIDs')
 
         updates
       end
@@ -289,7 +419,7 @@ module RBLE
 
         result = {}
         data.each do |company_id, bytes|
-          result[company_id.to_i] = bytes.map(&:to_i).pack("C*")
+          result[company_id.to_i] = bytes.map(&:to_i).pack('C*')
         end
         result
       end
@@ -308,9 +438,9 @@ module RBLE
       # Extract MAC address from D-Bus path like /org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF
       def extract_address_from_path(path)
         if path =~ /dev_([0-9A-F]{2}_[0-9A-F]{2}_[0-9A-F]{2}_[0-9A-F]{2}_[0-9A-F]{2}_[0-9A-F]{2})/i
-          $1.tr("_", ":").upcase
+          ::Regexp.last_match(1).tr('_', ':').upcase
         else
-          "UNKNOWN"
+          'UNKNOWN'
         end
       end
 
@@ -324,6 +454,115 @@ module RBLE
         @adapter = nil
         @scan_callback = nil
         @known_devices.clear
+      end
+
+      # Ensure we have a D-Bus connection (reuse if available)
+      def ensure_connection
+        return @connection if @connection
+
+        conn = RBLE::BlueZ::DBusConnection.new
+        conn.connect
+        @connection = conn
+        conn
+      end
+
+      # Setup an event loop for connection state tracking
+      def setup_connection_event_loop(conn, device_path)
+        event_loop = RBLE::BlueZ::EventLoop.new
+
+        # Subscribe to PropertiesChanged on the device
+        device_obj = conn.object(device_path)
+        props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
+
+        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+          event_loop.enqueue(:properties_changed, device_path, changed) if interface == RBLE::BlueZ::DEVICE_INTERFACE
+        end
+
+        # Start the event loop
+        event_loop.start(conn.bus)
+        event_loop
+      end
+
+      # Cleanup a connection event loop
+      def cleanup_connection_event_loop(event_loop)
+        event_loop&.stop
+      end
+
+      # Wait for a property to change to expected value
+      # @param event_loop [EventLoop] Event loop to use
+      # @param device_path [String] Device path to watch
+      # @param property [String] Property name (e.g., 'Connected', 'ServicesResolved')
+      # @param expected_value [Object] Expected property value
+      # @param timeout [Numeric] Timeout in seconds
+      # @raise [ConnectionTimeoutError] if timeout exceeded
+      def wait_for_property(event_loop, device_path, property, expected_value, timeout)
+        deadline = Time.now + timeout
+
+        loop do
+          remaining = deadline - Time.now
+          raise ConnectionTimeoutError, timeout if remaining <= 0
+
+          # Process events with timeout
+          shutdown = event_loop.process_events(timeout: [remaining, 0.5].min) do |event|
+            next unless event.type == :properties_changed
+            next unless event.path == device_path
+            next unless event.data.is_a?(Hash) && event.data.key?(property)
+
+            return true if event.data[property] == expected_value
+          end
+
+          # Check if we received shutdown
+          break if shutdown
+        end
+
+        raise ConnectionTimeoutError, timeout
+      end
+
+      # Enumerate GATT services and characteristics for a device
+      # @param device_path [String] Device path
+      # @return [Array<Service>] Services with characteristics
+      def enumerate_services(device_path)
+        conn = ensure_connection
+        om = conn.object_manager
+        managed = om.GetManagedObjects.first
+
+        # Find all services under this device
+        services = []
+        service_paths = managed.select do |path, ifaces|
+          path.start_with?("#{device_path}/") && ifaces.key?(RBLE::BlueZ::GATT_SERVICE_INTERFACE)
+        end
+
+        service_paths.each do |service_path, service_ifaces|
+          service_props = service_ifaces[RBLE::BlueZ::GATT_SERVICE_INTERFACE]
+          service_uuid = service_props['UUID']
+          service_primary = service_props['Primary'] != false
+
+          # Find characteristics for this service
+          characteristics = []
+          char_paths = managed.select do |path, ifaces|
+            path.start_with?("#{service_path}/") && ifaces.key?(RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE)
+          end
+
+          char_paths.each_value do |char_ifaces|
+            char_props = char_ifaces[RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE]
+            char_uuid = char_props['UUID']
+            char_flags = char_props['Flags'] || []
+
+            characteristics << Characteristic.new(
+              uuid: char_uuid,
+              flags: char_flags,
+              service_uuid: service_uuid
+            )
+          end
+
+          services << Service.new(
+            uuid: service_uuid,
+            primary: service_primary,
+            characteristics: characteristics
+          )
+        end
+
+        services
       end
     end
   end

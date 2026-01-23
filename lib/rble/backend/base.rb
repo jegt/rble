@@ -47,6 +47,47 @@ module RBLE
       def default_adapter
         adapters.first&.dig(:name)
       end
+
+      # Connection methods (implement in subclass)
+
+      # Connect to a BLE device
+      #
+      # @param device_path [String] D-Bus device path
+      # @param timeout [Numeric] Connection timeout in seconds
+      # @return [Boolean] true on successful connection
+      # @raise [NotImplementedError] if not implemented by subclass
+      def connect_device(device_path, timeout: 30)
+        raise NotImplementedError, "#{self.class}#connect_device must be implemented"
+      end
+
+      # Disconnect from a BLE device
+      #
+      # @param device_path [String] D-Bus device path
+      # @return [void]
+      # @raise [NotImplementedError] if not implemented by subclass
+      def disconnect_device(device_path)
+        raise NotImplementedError, "#{self.class}#disconnect_device must be implemented"
+      end
+
+      # Discover GATT services on a connected device
+      #
+      # @param device_path [String] D-Bus device path
+      # @param timeout [Numeric] Discovery timeout in seconds
+      # @return [Array<Service>] Discovered services
+      # @raise [NotImplementedError] if not implemented by subclass
+      def discover_services(device_path, timeout: 30)
+        raise NotImplementedError, "#{self.class}#discover_services must be implemented"
+      end
+
+      # Get the device D-Bus path for a given MAC address
+      #
+      # @param address [String] Device MAC address
+      # @param adapter [String, nil] Specific adapter to use
+      # @return [String, nil] Device path or nil if not found
+      # @raise [NotImplementedError] if not implemented by subclass
+      def device_path_for_address(address, adapter: nil)
+        raise NotImplementedError, "#{self.class}#device_path_for_address must be implemented"
+      end
     end
   end
 end
