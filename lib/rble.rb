@@ -7,6 +7,7 @@ require_relative 'rble/service'
 require_relative 'rble/characteristic'
 require_relative 'rble/backend'
 require_relative 'rble/scanner'
+require_relative 'rble/connection'
 
 module RBLE
   # Main module for RBLE BLE library
