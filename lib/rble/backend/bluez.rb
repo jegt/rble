@@ -29,6 +29,10 @@ module RBLE
         # Monitoring infrastructure for disconnect detection
         @monitoring_loop = nil
         @monitoring_mutex = Mutex.new
+
+        # Thread safety: protects shared state accessed from multiple threads
+        # (D-Bus signal handlers run on rble-dbus-loop thread, user code on main thread)
+        @state_mutex = Mutex.new
       end
 
       # Start scanning for BLE devices
@@ -37,20 +41,21 @@ module RBLE
       # @param adapter [String, nil] Adapter name (e.g., "hci0")
       # @yield [Device] Called when device discovered/updated
       def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, &block)
-        raise ScanInProgressError if @scanning
+        @state_mutex.synchronize do
+          raise ScanInProgressError if @scanning
+          @scanning = true
+        end
         raise ArgumentError, 'Block required for scan callback' unless block_given?
 
         @scan_callback = block
         @allow_duplicates = allow_duplicates
-        @known_devices.clear
+        @state_mutex.synchronize { @known_devices.clear }
 
         begin
           setup_connection
           setup_adapter(adapter)
           setup_signal_handlers
           start_discovery(service_uuids: service_uuids, allow_duplicates: allow_duplicates)
-
-          @scanning = true
 
           # Process existing devices (already discovered before scan started)
           process_existing_devices
@@ -65,7 +70,7 @@ module RBLE
 
       # Stop current scan
       def stop_scan
-        return unless @scanning
+        @state_mutex.synchronize { return unless @scanning }
 
         begin
           @adapter&.stop_discovery
@@ -79,7 +84,7 @@ module RBLE
       # Check if scanning
       # @return [Boolean]
       def scanning?
-        @scanning
+        @state_mutex.synchronize { @scanning }
       end
 
       # List available adapters
@@ -125,8 +130,10 @@ module RBLE
       # @raise [ConnectionTimeoutError] if connection times out
       # @raise [ConnectionError] on other connection failures
       def connect_device(device_path, timeout: 30)
-        # Check if already connected
-        raise AlreadyConnectedError if @connected_devices.key?(device_path)
+        # Check if already connected (thread-safe)
+        @state_mutex.synchronize do
+          raise AlreadyConnectedError if @connected_devices.key?(device_path)
+        end
 
         # Create BlueZ::Device wrapper
         conn = ensure_connection
@@ -134,7 +141,7 @@ module RBLE
 
         # Check if already connected at BlueZ level
         if device.connected?
-          @connected_devices[device_path] = device
+          @state_mutex.synchronize { @connected_devices[device_path] = device }
           return true
         end
 
@@ -148,8 +155,8 @@ module RBLE
           # Wait for Connected = true via PropertiesChanged
           wait_for_property(event_loop, device_path, 'Connected', true, timeout)
 
-          # Store connected device
-          @connected_devices[device_path] = device
+          # Store connected device (thread-safe)
+          @state_mutex.synchronize { @connected_devices[device_path] = device }
           true
         rescue ConnectionTimeoutError
           # Cleanup on timeout
@@ -168,11 +175,12 @@ module RBLE
       # @param device_path [String] D-Bus device path
       # @return [void]
       def disconnect_device(device_path)
-        device = @connected_devices.delete(device_path)
+        device = @state_mutex.synchronize do
+          dev = @connected_devices.delete(device_path)
+          @device_services.delete(device_path)
+          dev
+        end
         return unless device
-
-        # Clear cached services
-        @device_services.delete(device_path)
 
         # Unregister connection for disconnect monitoring
         unregister_connection(device_path)
@@ -190,7 +198,7 @@ module RBLE
       # @param connection [Connection] Connection instance to notify on disconnect
       # @return [void]
       def register_connection(device_path, connection)
-        @connection_objects[device_path] = connection
+        @state_mutex.synchronize { @connection_objects[device_path] = connection }
         setup_disconnect_monitoring(device_path, connection)
       end
 
@@ -198,7 +206,7 @@ module RBLE
       # @param device_path [String] D-Bus device path
       # @return [void]
       def unregister_connection(device_path)
-        @connection_objects.delete(device_path)
+        @state_mutex.synchronize { @connection_objects.delete(device_path) }
         # Signal handler cleanup happens automatically when device object is GC'd
       end
 
@@ -209,11 +217,13 @@ module RBLE
       # @raise [NotConnectedError] if device is not connected
       # @raise [ServiceDiscoveryError] if discovery fails
       def discover_services(device_path, timeout: 30)
-        device = @connected_devices[device_path]
+        device, cached_services = @state_mutex.synchronize do
+          [@connected_devices[device_path], @device_services[device_path]]
+        end
         raise NotConnectedError unless device
 
         # Return cached services if available
-        return @device_services[device_path] if @device_services.key?(device_path)
+        return cached_services if cached_services
 
         # Check if services already resolved
         unless device.services_resolved?
@@ -233,7 +243,7 @@ module RBLE
 
         # Enumerate services and characteristics
         services = enumerate_services(device_path)
-        @device_services[device_path] = services
+        @state_mutex.synchronize { @device_services[device_path] = services }
         services
       end
 
@@ -275,9 +285,10 @@ module RBLE
       # @raise [NotConnectedError] if device is not connected
       # @raise [ReadError] if read fails
       def read_characteristic(char_path, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
-        # Check connection before attempting read
+        # Check connection before attempting read (thread-safe)
         device_path = extract_device_path(char_path)
-        raise NotConnectedError unless device_path && @connected_devices.key?(device_path)
+        connected = @state_mutex.synchronize { device_path && @connected_devices.key?(device_path) }
+        raise NotConnectedError unless connected
 
         conn = ensure_connection
         wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
@@ -305,9 +316,10 @@ module RBLE
       # @raise [NotConnectedError] if device is not connected
       # @raise [WriteError] if write fails
       def write_characteristic(char_path, data, response: true, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
-        # Check connection before attempting write
+        # Check connection before attempting write (thread-safe)
         device_path = extract_device_path(char_path)
-        raise NotConnectedError unless device_path && @connected_devices.key?(device_path)
+        connected = @state_mutex.synchronize { device_path && @connected_devices.key?(device_path) }
+        raise NotConnectedError unless connected
 
         conn = ensure_connection
         wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
@@ -340,12 +352,16 @@ module RBLE
       # @raise [NotConnectedError] if device is not connected
       # @raise [NotifyError] if subscription fails
       def subscribe_characteristic(char_path, &callback)
-        # Already subscribed - return early
-        return true if @subscriptions.key?(char_path)
-
-        # Check connection before attempting subscribe
+        # Check connection and subscription state (thread-safe)
         device_path = extract_device_path(char_path)
-        raise NotConnectedError unless device_path && @connected_devices.key?(device_path)
+        already_subscribed, connected = @state_mutex.synchronize do
+          [@subscriptions.key?(char_path), device_path && @connected_devices.key?(device_path)]
+        end
+
+        # Already subscribed - return early
+        return true if already_subscribed
+
+        raise NotConnectedError unless connected
 
         conn = ensure_connection
         wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
@@ -366,8 +382,10 @@ module RBLE
           @event_loop&.enqueue(:notification, char_path, { value: value, callback: callback })
         end
 
-        # Store subscription for tracking
-        @subscriptions[char_path] = { callback: callback, wrapper: wrapper }
+        # Store subscription for tracking (thread-safe)
+        @state_mutex.synchronize do
+          @subscriptions[char_path] = { callback: callback, wrapper: wrapper }
+        end
         true
       rescue DBus::Error => e
         # Check if disconnect related - handle unexpected disconnect
@@ -383,12 +401,16 @@ module RBLE
       # @return [Boolean] true on success
       # @raise [NotConnectedError] if device is not connected
       def unsubscribe_characteristic(char_path)
-        subscription = @subscriptions.delete(char_path)
+        device_path = extract_device_path(char_path)
+        subscription, connected = @state_mutex.synchronize do
+          sub = @subscriptions.delete(char_path)
+          conn = device_path && @connected_devices.key?(device_path)
+          [sub, conn]
+        end
         return true unless subscription
 
         # Check connection before attempting unsubscribe
-        device_path = extract_device_path(char_path)
-        raise NotConnectedError unless device_path && @connected_devices.key?(device_path)
+        raise NotConnectedError unless connected
 
         begin
           subscription[:wrapper].stop_notify
@@ -449,20 +471,24 @@ module RBLE
       # Handle unexpected disconnect detected via PropertiesChanged signal
       # @param device_path [String] D-Bus device path
       def handle_unexpected_disconnect(device_path)
-        connection = @connection_objects[device_path]
-        return unless connection
+        # Get connection and clean up state atomically (thread-safe)
+        connection = @state_mutex.synchronize do
+          conn = @connection_objects.delete(device_path)
+          return unless conn
 
-        # Clean up tracking state
-        @connected_devices.delete(device_path)
-        @device_services.delete(device_path)
-        unregister_connection(device_path)
+          # Clean up tracking state
+          @connected_devices.delete(device_path)
+          @device_services.delete(device_path)
 
-        # Clear any active subscriptions for this device's characteristics
-        @subscriptions.keys.each do |char_path|
-          @subscriptions.delete(char_path) if char_path.start_with?(device_path)
+          # Clear any active subscriptions for this device's characteristics
+          # Use delete_if to avoid modifying hash during iteration
+          @subscriptions.delete_if { |char_path, _| char_path.start_with?(device_path) }
+
+          conn
         end
 
         # Notify the Connection object with link_loss reason
+        # Called OUTSIDE mutex to prevent deadlock if callback accesses backend
         connection.handle_disconnect(:link_loss)
       end
 
@@ -537,15 +563,19 @@ module RBLE
         object_manager = root[RBLE::BlueZ::OBJECT_MANAGER_INTERFACE]
 
         object_manager.on_signal('InterfacesAdded') do |path, interfaces|
-          if interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE) && @event_loop
-            @event_loop.enqueue(:device_found, path, interfaces[RBLE::BlueZ::DEVICE_INTERFACE])
+          # Capture @event_loop to prevent race with cleanup setting it to nil
+          event_loop = @event_loop
+          if interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE) && event_loop
+            event_loop.enqueue(:device_found, path, interfaces[RBLE::BlueZ::DEVICE_INTERFACE])
           end
         end
         @signal_handlers << [:interfaces_added, object_manager]
 
         object_manager.on_signal('InterfacesRemoved') do |path, interfaces|
-          if interfaces.include?(RBLE::BlueZ::DEVICE_INTERFACE) && @event_loop
-            @event_loop.enqueue(:device_removed, path, nil)
+          # Capture @event_loop to prevent race with cleanup setting it to nil
+          event_loop = @event_loop
+          if interfaces.include?(RBLE::BlueZ::DEVICE_INTERFACE) && event_loop
+            event_loop.enqueue(:device_removed, path, nil)
           end
         end
         @signal_handlers << [:interfaces_removed, object_manager]
@@ -556,8 +586,10 @@ module RBLE
         props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
         props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
-          if interface == RBLE::BlueZ::DEVICE_INTERFACE && @event_loop
-            @event_loop.enqueue(:properties_changed, device_path, changed)
+          # Capture @event_loop to prevent race with cleanup setting it to nil
+          event_loop = @event_loop
+          if interface == RBLE::BlueZ::DEVICE_INTERFACE && event_loop
+            event_loop.enqueue(:properties_changed, device_path, changed)
           end
         end
         @signal_handlers << [:properties_changed, props_iface, device_path]
@@ -613,9 +645,13 @@ module RBLE
         return unless path.start_with?(@adapter.path)
 
         device = build_device(path, properties)
-        is_new = !@known_devices.key?(path)
 
-        @known_devices[path] = device
+        # Thread-safe check-then-act for known_devices
+        is_new = @state_mutex.synchronize do
+          new_device = !@known_devices.key?(path)
+          @known_devices[path] = device
+          new_device
+        end
 
         # Subscribe to property changes for this device (only if monitoring updates)
         # Skip subscription when not needed - on_signal makes synchronous D-Bus calls
@@ -629,20 +665,22 @@ module RBLE
       end
 
       def handle_device_removed(path)
-        @known_devices.delete(path)
+        @state_mutex.synchronize { @known_devices.delete(path) }
       end
 
       def handle_properties_changed(path, changed)
-        return unless @known_devices.key?(path)
-
-        # Update device with changed properties
-        old_device = @known_devices[path]
         updates = parse_property_updates(changed)
-
         return if updates.empty?
 
-        new_device = old_device.update(**updates)
-        @known_devices[path] = new_device
+        # Thread-safe update of known_devices
+        new_device = @state_mutex.synchronize do
+          old_device = @known_devices[path]
+          return unless old_device
+
+          updated = old_device.update(**updates)
+          @known_devices[path] = updated
+          updated
+        end
 
         # Callback if allow_duplicates (for RSSI monitoring)
         @scan_callback&.call(new_device) if @allow_duplicates
@@ -724,17 +762,26 @@ module RBLE
       end
 
       def cleanup
-        @scanning = false
+        # Stop event loop first (before clearing state it might access)
         @event_loop&.stop
         @event_loop = nil
         stop_monitoring_loop
+
+        # Clear all shared state atomically
+        @state_mutex.synchronize do
+          @scanning = false
+          @known_devices.clear
+          @connection_objects.clear
+          @connected_devices.clear
+          @device_services.clear
+          @subscriptions.clear
+        end
+
         @signal_handlers.clear
         @connection&.disconnect
         @connection = nil
         @adapter = nil
         @scan_callback = nil
-        @known_devices.clear
-        @connection_objects.clear
       end
 
       # Ensure we have a D-Bus connection (reuse if available)

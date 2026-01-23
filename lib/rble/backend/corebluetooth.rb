@@ -35,6 +35,10 @@ module RBLE
         # Background event processor for async events (disconnect, notifications)
         @event_processor_thread = nil
         @event_processor_running = false
+
+        # Thread safety: protects shared state accessed from multiple threads
+        # (event_processor_thread and user thread)
+        @state_mutex = Mutex.new
       end
 
       # Start the subprocess if not running
@@ -114,11 +118,13 @@ module RBLE
       # Backend::Base implementations
 
       def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, &block)
-        raise ScanInProgressError if @scanning
+        @state_mutex.synchronize do
+          raise ScanInProgressError if @scanning
+          @scanning = true
+        end
         raise ArgumentError, 'Block required for scan callback' unless block_given?
 
         @scan_callback = block
-        @scanning = true
 
         params = { allow_duplicates: allow_duplicates }
         params[:service_uuids] = service_uuids if service_uuids
@@ -127,15 +133,17 @@ module RBLE
       end
 
       def stop_scan
-        return unless @scanning
+        @state_mutex.synchronize { return unless @scanning }
 
         send_request('scan_stop')
-        @scanning = false
-        @scan_callback = nil
+        @state_mutex.synchronize do
+          @scanning = false
+          @scan_callback = nil
+        end
       end
 
       def scanning?
-        @scanning
+        @state_mutex.synchronize { @scanning }
       end
 
       def adapters
@@ -176,15 +184,17 @@ module RBLE
       # @raise [AlreadyConnectedError] if already connected
       # @raise [ConnectionTimeoutError] if connection times out
       def connect_device(device_identifier, timeout: 30)
-        # Check if already connected
-        raise AlreadyConnectedError if @connected_devices.key?(device_identifier)
+        # Check if already connected (thread-safe)
+        @state_mutex.synchronize do
+          raise AlreadyConnectedError if @connected_devices.key?(device_identifier)
+        end
 
         send_request('connect', {
           uuid: device_identifier,
           timeout: timeout
         }, timeout: timeout + 5) # Extra buffer for subprocess
 
-        @connected_devices[device_identifier] = true
+        @state_mutex.synchronize { @connected_devices[device_identifier] = true }
         true
       end
 
@@ -192,8 +202,10 @@ module RBLE
       # @param device_identifier [String] Device UUID
       # @return [void]
       def disconnect_device(device_identifier)
-        @connected_devices.delete(device_identifier)
-        @device_services.delete(device_identifier)
+        @state_mutex.synchronize do
+          @connected_devices.delete(device_identifier)
+          @device_services.delete(device_identifier)
+        end
 
         begin
           send_request('disconnect', { uuid: device_identifier }, timeout: 5)
@@ -209,10 +221,13 @@ module RBLE
       # @raise [NotConnectedError] if not connected
       # @raise [ServiceDiscoveryError] if discovery fails
       def discover_services(device_identifier, timeout: 30)
-        raise NotConnectedError unless @connected_devices.key?(device_identifier)
+        connected, cached_services = @state_mutex.synchronize do
+          [@connected_devices.key?(device_identifier), @device_services[device_identifier]]
+        end
+        raise NotConnectedError unless connected
 
         # Return cached services if available
-        return @device_services[device_identifier] if @device_services.key?(device_identifier)
+        return cached_services if cached_services
 
         result = send_request('discover_services', {
           uuid: device_identifier,
@@ -220,7 +235,7 @@ module RBLE
         }, timeout: timeout + 5)
 
         services = build_services_from_result(result['services'], device_identifier)
-        @device_services[device_identifier] = services
+        @state_mutex.synchronize { @device_services[device_identifier] = services }
         services
       end
 
@@ -239,14 +254,14 @@ module RBLE
       # @param connection [Connection] The Connection instance
       # @return [void]
       def register_connection(device_identifier, connection)
-        @connection_objects[device_identifier] = connection
+        @state_mutex.synchronize { @connection_objects[device_identifier] = connection }
       end
 
       # Unregister a Connection object from disconnect monitoring
       # @param device_identifier [String] Device UUID
       # @return [void]
       def unregister_connection(device_identifier)
-        @connection_objects.delete(device_identifier)
+        @state_mutex.synchronize { @connection_objects.delete(device_identifier) }
       end
 
       # Read a characteristic value
@@ -303,7 +318,8 @@ module RBLE
       # @return [Boolean] true on success
       # @raise [NotifyError] if subscription fails
       def subscribe_characteristic(char_identifier, &callback)
-        return true if @subscriptions.key?(char_identifier)
+        already_subscribed = @state_mutex.synchronize { @subscriptions.key?(char_identifier) }
+        return true if already_subscribed
 
         device_uuid, service_uuid, char_uuid = parse_char_identifier(char_identifier)
 
@@ -313,7 +329,7 @@ module RBLE
           char_uuid: char_uuid
         }, timeout: 30)
 
-        @subscriptions[char_identifier] = callback
+        @state_mutex.synchronize { @subscriptions[char_identifier] = callback }
         true
       rescue StandardError => e
         raise NotifyError, translate_error(e)
@@ -323,7 +339,7 @@ module RBLE
       # @param char_identifier [String] Format: "device_uuid:service_uuid:char_uuid"
       # @return [Boolean] true on success
       def unsubscribe_characteristic(char_identifier)
-        callback = @subscriptions.delete(char_identifier)
+        callback = @state_mutex.synchronize { @subscriptions.delete(char_identifier) }
         return true unless callback
 
         device_uuid, service_uuid, char_uuid = parse_char_identifier(char_identifier)
@@ -502,7 +518,7 @@ module RBLE
         value = params['value']
 
         identifier = "#{device_uuid}:#{service_uuid}:#{char_uuid}"
-        callback = @subscriptions[identifier]
+        callback = @state_mutex.synchronize { @subscriptions[identifier] }
         return unless callback
 
         # Convert byte array to binary string
@@ -528,12 +544,14 @@ module RBLE
                  else :unknown
                  end
 
-        # Clean up tracking
-        @connected_devices.delete(uuid)
-        @device_services.delete(uuid)
+        # Clean up tracking and get connection object atomically (thread-safe)
+        connection = @state_mutex.synchronize do
+          @connected_devices.delete(uuid)
+          @device_services.delete(uuid)
+          @connection_objects.delete(uuid)
+        end
 
-        # Notify Connection object
-        connection = @connection_objects.delete(uuid)
+        # Notify Connection object OUTSIDE mutex to prevent deadlock
         connection&.handle_disconnect(reason)
       end
 
