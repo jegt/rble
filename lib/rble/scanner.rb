@@ -161,5 +161,41 @@ module RBLE
     def adapters
       Backend.for_platform.adapters
     end
+
+    # Find a specific device by address
+    #
+    # Scans until the device with the given address is found, or timeout expires.
+    # Stops scanning immediately when the device is found.
+    #
+    # @param address [String] Device address (MAC on Linux, UUID on macOS)
+    # @param timeout [Numeric] Maximum time to scan (default: 10 seconds)
+    # @param adapter [String, nil] Bluetooth adapter name
+    # @return [Device, nil] The device if found, nil if not found within timeout
+    #
+    # @example Find a device by address
+    #   device = RBLE.find_device("AA:BB:CC:DD:EE:FF", timeout: 5)
+    #   if device
+    #     puts "Found #{device.name}"
+    #   end
+    #
+    # @example Find and connect
+    #   if device = RBLE.find_device("AA:BB:CC:DD:EE:FF")
+    #     conn = RBLE.connect(device.address)
+    #   end
+    #
+    def find_device(address, timeout: 10, adapter: nil)
+      found_device = nil
+      normalized_address = address.upcase
+
+      scanner = Scanner.new(timeout: timeout, adapter: adapter)
+      scanner.start do |device|
+        if device.address.upcase == normalized_address
+          found_device = device
+          scanner.stop
+        end
+      end
+
+      found_device
+    end
   end
 end

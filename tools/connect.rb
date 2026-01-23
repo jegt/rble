@@ -2,20 +2,16 @@
 
   address = ARGV[0]
 
-  # Step 1: Scan to discover the device
+  # Step 1: Find the device (stops scanning as soon as device is found)
   puts "Scanning for #{address}..."
-  found = false
-  RBLE.scan(timeout: 10, allow_duplicates: false) do |device|
-    if device.address == address
-      puts "Found device: #{device.name || 'unnamed'}"
-      found = true
-    end
-  end
+  device = RBLE.find_device(address, timeout: 10)
 
-  unless found
+  unless device
     puts "Device not found during scan. Make sure it's advertising."
     exit 1
   end
+
+  puts "Found device: #{device.name || 'unnamed'}"
 
   # Step 2: Now connect
   puts "Connecting..."
