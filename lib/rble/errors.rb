@@ -24,7 +24,22 @@ module RBLE
   class PermissionError < Error
     def initialize(operation = 'access Bluetooth')
       super("Permission denied to #{operation}. " \
-            "Ensure user is in 'bluetooth' group or has appropriate polkit permissions.")
+            "On Linux: ensure user is in 'bluetooth' group or has appropriate polkit permissions. " \
+            "On macOS: grant Bluetooth access in System Preferences > Privacy & Security.")
+    end
+  end
+
+  # Raised when subprocess communication fails (macOS backend)
+  class SubprocessError < Error
+    def initialize(msg = 'Subprocess communication failed. The helper process may have crashed.')
+      super
+    end
+  end
+
+  # Raised when Bluetooth is not powered on
+  class BluetoothOffError < Error
+    def initialize
+      super('Bluetooth is not powered on. Enable Bluetooth in system settings.')
     end
   end
 
