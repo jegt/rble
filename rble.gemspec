@@ -21,8 +21,12 @@ Gem::Specification.new do |spec|
 
   # Include lib/ and ext/ but exclude build artifacts
   spec.files = Dir['lib/**/*', 'LICENSE.txt', 'README.md'] +
-               Dir['ext/macos_ble/Package.swift', 'ext/macos_ble/Sources/**/*.swift']
+               Dir['ext/macos_ble/Package.swift', 'ext/macos_ble/Sources/**/*.swift'] +
+               ['ext/macos_ble/extconf.rb']
   spec.require_paths = ['lib']
+
+  # Build macOS Swift helper during gem install
+  spec.extensions = ['ext/macos_ble/extconf.rb']
 
   # Runtime dependencies
   spec.add_dependency 'ruby-dbus', '~> 0.25'

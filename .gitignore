@@ -21,5 +21,7 @@ Gemfile.lock
 
 # macOS BLE helper build artifacts
 /ext/macos_ble/.build/
+/ext/macos_ble/Makefile
+/ext/macos_ble/mkmf.log
 .claude/
 .planning/

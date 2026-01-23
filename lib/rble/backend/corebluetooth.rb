@@ -42,7 +42,16 @@ module RBLE
         return if @wait_thread&.alive?
 
         unless File.exist?(HELPER_PATH)
-          raise SubprocessError, "Helper not found at #{HELPER_PATH}. Run 'swift build -c release' in ext/macos_ble/"
+          raise SubprocessError, <<~MSG.strip
+            macOS BLE helper not found at #{HELPER_PATH}
+
+            The helper should build automatically during gem install. To build manually:
+              cd #{File.dirname(HELPER_PATH).sub('/.build/release', '')}
+              swift build -c release
+
+            Ensure Xcode Command Line Tools are installed:
+              xcode-select --install
+          MSG
         end
 
         @stdin, @stdout, @stderr, @wait_thread = Open3.popen3(HELPER_PATH)

@@ -31,15 +31,20 @@ Then run:
 bundle install
 ```
 
-### macOS Additional Step
+### macOS
 
-On macOS, you need to build the CoreBluetooth helper binary:
+On macOS, a Swift helper binary is automatically compiled during gem installation. This requires Xcode Command Line Tools:
 
 ```bash
-bundle exec rake build:macos
+xcode-select --install
 ```
 
-This compiles a small Swift helper that bridges CoreBluetooth to Ruby.
+If the automatic build fails, you can build manually:
+
+```bash
+cd $(bundle info rble --path)/ext/macos_ble
+swift build -c release
+```
 
 ### Linux Permissions
 
