@@ -24,6 +24,7 @@ module RBLE
         # Connection tracking
         @connected_devices = {}  # device_uuid => true
         @device_services = {}    # device_uuid => [service_data, ...]
+        @connection_objects = {} # device_uuid => Connection instance
 
         # Subscription tracking
         @subscriptions = {}      # char_identifier => callback
@@ -210,6 +211,21 @@ module RBLE
         address
       end
 
+      # Register a Connection object for disconnect monitoring
+      # @param device_identifier [String] Device UUID
+      # @param connection [Connection] The Connection instance
+      # @return [void]
+      def register_connection(device_identifier, connection)
+        @connection_objects[device_identifier] = connection
+      end
+
+      # Unregister a Connection object from disconnect monitoring
+      # @param device_identifier [String] Device UUID
+      # @return [void]
+      def unregister_connection(device_identifier)
+        @connection_objects.delete(device_identifier)
+      end
+
       # Read a characteristic value
       # @param char_identifier [String] Format: "device_uuid:service_uuid:char_uuid"
       # @param timeout [Numeric] Read timeout in seconds
@@ -328,9 +344,11 @@ module RBLE
           handle_device_discovered(event[:params] || event['params'])
         when 'notification'
           handle_notification(event[:params] || event['params'])
+        when 'disconnected'
+          handle_disconnected(event[:params] || event['params'])
         when 'state_changed'
           # Could notify app of BT state change
-        when 'connected', 'disconnected'
+        when 'connected'
           # Connection state events (handled via request/response)
         end
       end
@@ -407,7 +425,6 @@ module RBLE
 
       def handle_response_error(response)
         error = response[:error]
-        code = error['code'] || error[:code]
         message = error['message'] || error[:message]
         platform_error = (error['data'] || error[:data])&.dig('platform_error')
 
@@ -438,6 +455,33 @@ module RBLE
         # Convert byte array to binary string
         binary_value = (value || []).map(&:to_i).pack('C*')
         callback.call(binary_value)
+      end
+
+      # Handle disconnect event from subprocess
+      # @param params [Hash] Disconnect parameters from subprocess
+      def handle_disconnected(params)
+        return unless params
+
+        uuid = params['uuid']
+        reason_str = params['reason'] || 'unknown'
+
+        # Map string reason to symbol
+        reason = case reason_str
+                 when 'user_requested' then :user_requested
+                 when 'timeout' then :timeout
+                 when 'remote_disconnect' then :remote_disconnect
+                 when 'connection_failed' then :connection_failed
+                 when 'link_loss' then :link_loss
+                 else :unknown
+                 end
+
+        # Clean up tracking
+        @connected_devices.delete(uuid)
+        @device_services.delete(uuid)
+
+        # Notify Connection object
+        connection = @connection_objects.delete(uuid)
+        connection&.handle_disconnect(reason)
       end
 
       # Parse characteristic identifier into components
