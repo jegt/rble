@@ -21,6 +21,9 @@ module RBLE
         @reader_thread = nil
         @event_queue = Queue.new
 
+        # Separate queue for responses (id present) vs async events (method present)
+        @response_queue = Queue.new
+
         # Connection tracking
         @connected_devices = {}  # device_uuid => true
         @device_services = {}    # device_uuid => [service_data, ...]
@@ -28,6 +31,10 @@ module RBLE
 
         # Subscription tracking
         @subscriptions = {}      # char_identifier => callback
+
+        # Background event processor for async events (disconnect, notifications)
+        @event_processor_thread = nil
+        @event_processor_running = false
       end
 
       # Start the subprocess if not running
@@ -42,6 +49,9 @@ module RBLE
 
         # Start reader thread for async events
         start_reader_thread
+
+        # Start background event processor
+        start_event_processor
       end
 
       # Send request and wait for response
@@ -49,38 +59,42 @@ module RBLE
         ensure_subprocess
         raise SubprocessError, 'Subprocess not running' unless @wait_thread&.alive?
 
+        request_id = nil
         @mutex.synchronize do
           @request_id += 1
-          request = { id: @request_id, method: method }
+          request_id = @request_id
+          request = { id: request_id, method: method }
           request[:params] = params if params
 
           @stdin.puts(JSON.generate(request))
           @stdin.flush
-
-          # Read response with timeout
-          deadline = Time.now + timeout
-          while Time.now < deadline
-            # Check for response in event queue
-            begin
-              event = @event_queue.pop(true) # non-blocking
-              if event[:id] == @request_id
-                handle_response_error(event) if event[:error]
-                return event[:result]
-              else
-                # It's an async event, process it
-                handle_async_event(event)
-              end
-            rescue ThreadError
-              # Queue empty, wait a bit
-              sleep 0.01
-            end
-          end
-
-          raise ConnectionTimeoutError, timeout
         end
+
+        # Wait for response in response queue (async events handled by event_processor_thread)
+        deadline = Time.now + timeout
+        while Time.now < deadline
+          begin
+            response = @response_queue.pop(true) # non-blocking
+            if response[:id] == request_id
+              handle_response_error(response) if response[:error]
+              return response[:result]
+            else
+              # Not our response, put it back (shouldn't happen often with single-threaded requests)
+              @response_queue.push(response)
+              sleep 0.001
+            end
+          rescue ThreadError
+            # Queue empty, wait a bit
+            sleep 0.01
+          end
+        end
+
+        raise ConnectionTimeoutError, timeout
       end
 
       def shutdown
+        @event_processor_running = false
+        @event_processor_thread&.kill
         @reader_thread&.kill
         @stdin&.close
         @stdout&.close
@@ -327,7 +341,15 @@ module RBLE
               event = JSON.parse(line, symbolize_names: false)
               # Normalize keys for Ruby
               event = event.transform_keys(&:to_sym) if event.is_a?(Hash)
-              @event_queue.push(event)
+
+              # Route to appropriate queue based on whether it's a response or async event
+              if event[:id]
+                # Response to a request
+                @response_queue.push(event)
+              else
+                # Async event (device_discovered, notification, disconnected, etc.)
+                @event_queue.push(event)
+              end
             rescue JSON::ParserError
               # Log to stderr, don't crash
               warn "[rble] Invalid JSON from subprocess: #{line}"
@@ -335,6 +357,25 @@ module RBLE
           end
         rescue IOError
           # Subprocess closed
+        end
+      end
+
+      # Start background thread to process async events
+      def start_event_processor
+        return if @event_processor_thread&.alive?
+
+        @event_processor_running = true
+        @event_processor_thread = Thread.new do
+          while @event_processor_running
+            begin
+              # Block with timeout so we can check @event_processor_running
+              event = @event_queue.pop(true) rescue nil
+              handle_async_event(event) if event
+            rescue StandardError => e
+              warn "[rble] Event processor error: #{e.message}"
+            end
+            sleep 0.01 # Small sleep to prevent CPU spinning
+          end
         end
       end
 
