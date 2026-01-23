@@ -140,6 +140,39 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         }
     }
 
+    /// Wait for Bluetooth state to be determined (not unknown or resetting)
+    /// - Parameters:
+    ///   - timeout: Maximum time to wait in seconds
+    ///   - completion: Called with true if state is now known, false if timeout
+    func waitForStateKnown(timeout: Int = 2, completion: @escaping (Bool) -> Void) {
+        // Already in a known state?
+        let state = centralManager.state
+        if state != .unknown && state != .resetting {
+            completion(true)
+            return
+        }
+
+        // Wait for state change
+        var completed = false
+        let timeoutWorkItem = DispatchWorkItem {
+            if !completed {
+                completed = true
+                self.stateChangeCallback = nil
+                completion(false)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(timeout), execute: timeoutWorkItem)
+
+        stateChangeCallback = { newState in
+            if !completed && newState != .unknown && newState != .resetting {
+                completed = true
+                timeoutWorkItem.cancel()
+                self.stateChangeCallback = nil
+                completion(true)
+            }
+        }
+    }
+
     // MARK: - CBCentralManagerDelegate
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {

@@ -65,7 +65,8 @@ func createParseErrorResponse() -> Response {
 func handleRequest(_ request: Request) -> Response? {
     switch request.method {
     case "adapters":
-        return handleAdapters(request)
+        handleAdapters(request)
+        return nil // Response sent asynchronously after state check
     case "scan_start":
         handleScanStart(request)
         return nil // Response sent asynchronously
@@ -102,20 +103,24 @@ func handleRequest(_ request: Request) -> Response? {
 
 /// Handle the "adapters" method - returns Bluetooth adapter state
 /// macOS has a single logical Bluetooth adapter
-func handleAdapters(_ request: Request) -> Response {
-    let state = bleManager.getState()
-    let powered = state == "powered_on"
+/// Waits briefly for CoreBluetooth to determine state if currently unknown
+func handleAdapters(_ request: Request) {
+    // Wait for state to be determined (not unknown/resetting)
+    bleManager.waitForStateKnown(timeout: 2) { _ in
+        let state = bleManager.getState()
+        let powered = state == "powered_on"
 
-    let adapter: [String: Any] = [
-        "name": "default",
-        "powered": powered,
-        "state": state
-    ]
+        let adapter: [String: Any] = [
+            "name": "default",
+            "powered": powered,
+            "state": state
+        ]
 
-    return Response.success(
-        id: request.id,
-        result: ["adapters": AnyCodable([adapter])]
-    )
+        writeResponse(Response.success(
+            id: request.id,
+            result: ["adapters": AnyCodable([adapter])]
+        ))
+    }
 }
 
 /// Handle the "scan_start" method - begins BLE scanning
