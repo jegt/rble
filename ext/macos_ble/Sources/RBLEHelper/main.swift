@@ -79,6 +79,17 @@ func handleRequest(_ request: Request) -> Response? {
     case "discover_services":
         handleDiscoverServices(request)
         return nil // Response sent asynchronously
+    case "read_characteristic":
+        handleReadCharacteristic(request)
+        return nil // Response sent asynchronously
+    case "write_characteristic":
+        handleWriteCharacteristic(request)
+        return nil // Response sent asynchronously
+    case "subscribe":
+        handleSubscribe(request)
+        return nil // Response sent asynchronously
+    case "unsubscribe":
+        return handleUnsubscribe(request)
     default:
         return Response.error(
             id: request.id,
@@ -311,6 +322,247 @@ func handleDiscoverServices(_ request: Request) {
             ))
         }
     }
+}
+
+// MARK: - GATT Operation Handlers
+
+/// Handle the "read_characteristic" method - reads a characteristic value
+/// Required params:
+///   - device_uuid: The peripheral's UUID string
+///   - service_uuid: The service UUID (short or full)
+///   - char_uuid: The characteristic UUID (short or full)
+/// Optional params:
+///   - timeout: Read timeout in seconds (default: 30)
+func handleReadCharacteristic(_ request: Request) {
+    guard let deviceUUID = request.params?["device_uuid"]?.value as? String,
+          let serviceUUID = request.params?["service_uuid"]?.value as? String,
+          let charUUID = request.params?["char_uuid"]?.value as? String else {
+        writeResponse(Response.error(
+            id: request.id,
+            code: ErrorCode.invalidParams,
+            message: "Missing required params: device_uuid, service_uuid, char_uuid"
+        ))
+        return
+    }
+
+    let timeout = request.params?["timeout"]?.value as? Int ?? 30
+
+    // Track timeout
+    var timedOut = false
+    let timeoutWorkItem = DispatchWorkItem {
+        timedOut = true
+        writeResponse(Response.error(
+            id: request.id,
+            code: BLEErrorCode.timeout,
+            message: "Read timeout"
+        ))
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(timeout), execute: timeoutWorkItem)
+
+    bleManager.readCharacteristic(
+        deviceUUID: deviceUUID,
+        serviceUUID: serviceUUID,
+        charUUID: charUUID
+    ) { result in
+        // Cancel timeout if we got a result
+        timeoutWorkItem.cancel()
+        guard !timedOut else { return }
+
+        switch result {
+        case .success(let data):
+            writeResponse(Response.success(
+                id: request.id,
+                result: ["value": AnyCodable(Array(data).map { Int($0) })]
+            ))
+        case .failure(let error):
+            let code: Int
+            if let bleError = error as? BLEError {
+                switch bleError {
+                case .notConnected: code = BLEErrorCode.notConnected
+                case .characteristicNotFound: code = BLEErrorCode.characteristicNotFound
+                default: code = BLEErrorCode.operationFailed
+                }
+            } else {
+                code = BLEErrorCode.operationFailed
+            }
+            writeResponse(Response.error(
+                id: request.id,
+                code: code,
+                message: error.localizedDescription
+            ))
+        }
+    }
+}
+
+/// Handle the "write_characteristic" method - writes a value to a characteristic
+/// Required params:
+///   - device_uuid: The peripheral's UUID string
+///   - service_uuid: The service UUID (short or full)
+///   - char_uuid: The characteristic UUID (short or full)
+///   - value: Array of bytes to write
+/// Optional params:
+///   - response: Whether to request write confirmation (default: true)
+///   - timeout: Write timeout in seconds (default: 30)
+func handleWriteCharacteristic(_ request: Request) {
+    guard let deviceUUID = request.params?["device_uuid"]?.value as? String,
+          let serviceUUID = request.params?["service_uuid"]?.value as? String,
+          let charUUID = request.params?["char_uuid"]?.value as? String,
+          let valueArray = request.params?["value"]?.value as? [Int] else {
+        writeResponse(Response.error(
+            id: request.id,
+            code: ErrorCode.invalidParams,
+            message: "Missing required params: device_uuid, service_uuid, char_uuid, value"
+        ))
+        return
+    }
+
+    let withResponse = request.params?["response"]?.value as? Bool ?? true
+    let data = Data(valueArray.map { UInt8(clamping: $0) })
+    let timeout = request.params?["timeout"]?.value as? Int ?? 30
+
+    // Track timeout
+    var timedOut = false
+    let timeoutWorkItem = DispatchWorkItem {
+        timedOut = true
+        writeResponse(Response.error(
+            id: request.id,
+            code: BLEErrorCode.timeout,
+            message: "Write timeout"
+        ))
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(timeout), execute: timeoutWorkItem)
+
+    bleManager.writeCharacteristic(
+        deviceUUID: deviceUUID,
+        serviceUUID: serviceUUID,
+        charUUID: charUUID,
+        data: data,
+        withResponse: withResponse
+    ) { result in
+        // Cancel timeout if we got a result
+        timeoutWorkItem.cancel()
+        guard !timedOut else { return }
+
+        switch result {
+        case .success:
+            writeResponse(Response.success(
+                id: request.id,
+                result: ["status": AnyCodable("written")]
+            ))
+        case .failure(let error):
+            let code: Int
+            if let bleError = error as? BLEError {
+                switch bleError {
+                case .notConnected: code = BLEErrorCode.notConnected
+                case .characteristicNotFound: code = BLEErrorCode.characteristicNotFound
+                default: code = BLEErrorCode.operationFailed
+                }
+            } else {
+                code = BLEErrorCode.operationFailed
+            }
+            writeResponse(Response.error(
+                id: request.id,
+                code: code,
+                message: error.localizedDescription
+            ))
+        }
+    }
+}
+
+/// Handle the "subscribe" method - subscribes to characteristic notifications
+/// Required params:
+///   - device_uuid: The peripheral's UUID string
+///   - service_uuid: The service UUID (short or full)
+///   - char_uuid: The characteristic UUID (short or full)
+/// Optional params:
+///   - timeout: Subscribe timeout in seconds (default: 30)
+func handleSubscribe(_ request: Request) {
+    guard let deviceUUID = request.params?["device_uuid"]?.value as? String,
+          let serviceUUID = request.params?["service_uuid"]?.value as? String,
+          let charUUID = request.params?["char_uuid"]?.value as? String else {
+        writeResponse(Response.error(
+            id: request.id,
+            code: ErrorCode.invalidParams,
+            message: "Missing required params: device_uuid, service_uuid, char_uuid"
+        ))
+        return
+    }
+
+    let timeout = request.params?["timeout"]?.value as? Int ?? 30
+
+    // Track timeout
+    var timedOut = false
+    let timeoutWorkItem = DispatchWorkItem {
+        timedOut = true
+        writeResponse(Response.error(
+            id: request.id,
+            code: BLEErrorCode.timeout,
+            message: "Subscribe timeout"
+        ))
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(timeout), execute: timeoutWorkItem)
+
+    bleManager.subscribe(
+        deviceUUID: deviceUUID,
+        serviceUUID: serviceUUID,
+        charUUID: charUUID
+    ) { result in
+        // Cancel timeout if we got a result
+        timeoutWorkItem.cancel()
+        guard !timedOut else { return }
+
+        switch result {
+        case .success:
+            writeResponse(Response.success(
+                id: request.id,
+                result: ["status": AnyCodable("subscribed")]
+            ))
+        case .failure(let error):
+            let code: Int
+            if let bleError = error as? BLEError {
+                switch bleError {
+                case .notConnected: code = BLEErrorCode.notConnected
+                case .characteristicNotFound: code = BLEErrorCode.characteristicNotFound
+                default: code = BLEErrorCode.operationFailed
+                }
+            } else {
+                code = BLEErrorCode.operationFailed
+            }
+            writeResponse(Response.error(
+                id: request.id,
+                code: code,
+                message: error.localizedDescription
+            ))
+        }
+    }
+}
+
+/// Handle the "unsubscribe" method - unsubscribes from characteristic notifications
+/// Required params:
+///   - device_uuid: The peripheral's UUID string
+///   - service_uuid: The service UUID (short or full)
+///   - char_uuid: The characteristic UUID (short or full)
+func handleUnsubscribe(_ request: Request) -> Response {
+    guard let deviceUUID = request.params?["device_uuid"]?.value as? String,
+          let serviceUUID = request.params?["service_uuid"]?.value as? String,
+          let charUUID = request.params?["char_uuid"]?.value as? String else {
+        return Response.error(
+            id: request.id,
+            code: ErrorCode.invalidParams,
+            message: "Missing required params: device_uuid, service_uuid, char_uuid"
+        )
+    }
+
+    bleManager.unsubscribe(
+        deviceUUID: deviceUUID,
+        serviceUUID: serviceUUID,
+        charUUID: charUUID
+    )
+
+    return Response.success(
+        id: request.id,
+        result: ["status": AnyCodable("unsubscribed")]
+    )
 }
 
 // MARK: - Main Entry Point
