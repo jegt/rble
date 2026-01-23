@@ -267,11 +267,16 @@ module RBLE
       # Connect via backend
       backend.connect_device(device_path, timeout: timeout)
 
-      Connection.new(
+      connection = Connection.new(
         address: address,
         device_path: device_path,
         backend: backend
       )
+
+      # Register connection for disconnect monitoring (BlueZ backend)
+      backend.register_connection(device_path, connection) if backend.respond_to?(:register_connection)
+
+      connection
     end
   end
 end

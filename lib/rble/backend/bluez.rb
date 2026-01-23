@@ -22,6 +22,9 @@ module RBLE
 
         # Subscription tracking for notifications
         @subscriptions = {} # char_path => { callback:, wrapper: }
+
+        # Connection object tracking for disconnect notifications
+        @connection_objects = {} # device_path => Connection instance
       end
 
       # Start scanning for BLE devices
@@ -167,12 +170,32 @@ module RBLE
         # Clear cached services
         @device_services.delete(device_path)
 
+        # Unregister connection for disconnect monitoring
+        unregister_connection(device_path)
+
         begin
           # Disconnect (no need to wait for confirmation - fire and forget)
           device.disconnect
         rescue DBus::Error
           # Ignore errors during cleanup - device may already be disconnected
         end
+      end
+
+      # Register a Connection for disconnect monitoring
+      # @param device_path [String] D-Bus device path
+      # @param connection [Connection] Connection instance to notify on disconnect
+      # @return [void]
+      def register_connection(device_path, connection)
+        @connection_objects[device_path] = connection
+        setup_disconnect_monitoring(device_path, connection)
+      end
+
+      # Unregister a Connection from disconnect monitoring
+      # @param device_path [String] D-Bus device path
+      # @return [void]
+      def unregister_connection(device_path)
+        @connection_objects.delete(device_path)
+        # Signal handler cleanup happens automatically when device object is GC'd
       end
 
       # Discover GATT services on a connected device
@@ -338,6 +361,13 @@ module RBLE
       end
 
       private
+
+      # Setup PropertiesChanged monitoring for disconnect detection
+      # @param device_path [String] D-Bus device path
+      # @param connection [Connection] Connection to notify on disconnect
+      def setup_disconnect_monitoring(device_path, connection)
+        # Implementation in Task 2
+      end
 
       # Translate D-Bus errors to human-readable messages
       def translate_dbus_error(error)
