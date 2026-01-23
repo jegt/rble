@@ -371,6 +371,9 @@ module RBLE
               # Block with timeout so we can check @event_processor_running
               event = @event_queue.pop(true) rescue nil
               handle_async_event(event) if event
+            rescue LocalJumpError
+              # Expected when user's callback uses `break` to exit early from scanning
+              # This is normal behavior, not an error
             rescue StandardError => e
               warn "[rble] Event processor error: #{e.message}"
             end

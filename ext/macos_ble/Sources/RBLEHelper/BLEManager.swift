@@ -379,17 +379,19 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         }
 
         // Find service (support both full and short UUID)
+        // Normalize both input UUID and CoreBluetooth UUID to full form for comparison
         let normalizedServiceUUID = normalizeUUID(serviceUUID)
         guard let service = services.first(where: {
-            $0.uuid.uuidString.uppercased() == normalizedServiceUUID
+            normalizeUUID($0.uuid.uuidString) == normalizedServiceUUID
         }) else {
             return nil
         }
 
         // Find characteristic
+        // Normalize both input UUID and CoreBluetooth UUID to full form for comparison
         let normalizedCharUUID = normalizeUUID(charUUID)
         return service.characteristics?.first(where: {
-            $0.uuid.uuidString.uppercased() == normalizedCharUUID
+            normalizeUUID($0.uuid.uuidString) == normalizedCharUUID
         })
     }
 
