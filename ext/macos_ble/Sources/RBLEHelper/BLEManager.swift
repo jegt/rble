@@ -109,8 +109,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         // First 2 bytes are company ID (little-endian), rest is payload
         if let mfgData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data {
             if mfgData.count >= 2 {
-                let companyId = UInt16(mfgData[0]) | (UInt16(mfgData[1]) << 8)
-                let dataBytes = Array(mfgData.dropFirst(2))
+                let companyId = Int(UInt16(mfgData[0]) | (UInt16(mfgData[1]) << 8))
+                let dataBytes = Array(mfgData.dropFirst(2)).map { Int($0) }
                 params["manufacturer_data"] = AnyCodable([
                     "company_id": companyId,
                     "data": dataBytes
@@ -120,9 +120,9 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
 
         // Parse service data (map of service UUID -> data bytes)
         if let serviceData = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data] {
-            var sdDict: [String: [UInt8]] = [:]
+            var sdDict: [String: [Int]] = [:]
             for (uuid, data) in serviceData {
-                sdDict[uuid.uuidString] = Array(data)
+                sdDict[uuid.uuidString] = Array(data).map { Int($0) }
             }
             params["service_data"] = AnyCodable(sdDict)
         }
