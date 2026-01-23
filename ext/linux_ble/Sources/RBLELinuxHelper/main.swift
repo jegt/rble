@@ -76,11 +76,60 @@ func handleRequest(_ request: Request) -> Response? {
     }
 }
 
+// MARK: - Prerequisite Validation
+
+/// Validate that all prerequisites are met for BLE operations on Linux.
+///
+/// This function performs fail-fast validation:
+/// 1. Checks for required Linux capabilities (CAP_NET_RAW, CAP_NET_ADMIN)
+/// 2. Checks that BlueZ daemon is not running (would conflict with direct HCI access)
+///
+/// If validation fails, writes a JSON error response to stdout and exits.
+/// This ensures Ruby gets a parseable error rather than cryptic socket errors later.
+func validatePrerequisites() {
+    #if os(Linux)
+    // Check Linux capabilities
+    do {
+        try checkCapabilities()
+    } catch let error as PermissionError {
+        writeResponse(formatPermissionError(error))
+        exit(1)
+    } catch {
+        writeResponse(Response.error(
+            id: 0,
+            code: LinuxErrorCode.missingCapabilities,
+            message: "Unexpected error checking capabilities: \(error)"
+        ))
+        exit(1)
+    }
+
+    // Check BlueZ daemon is not running
+    do {
+        try checkBlueZDaemon()
+    } catch let error as DaemonError {
+        writeResponse(formatDaemonError(error))
+        exit(1)
+    } catch {
+        writeResponse(Response.error(
+            id: 0,
+            code: LinuxErrorCode.daemonConflict,
+            message: "Unexpected error checking daemon: \(error)"
+        ))
+        exit(1)
+    }
+    #endif
+    // On macOS, skip validation (for development)
+}
+
 // MARK: - Main Entry Point
 
 func main() {
     // Disable stdout buffering for immediate output
     setbuf(stdout, nil)
+
+    // Validate prerequisites BEFORE entering the stdin read loop
+    // This ensures errors are reported immediately on startup
+    validatePrerequisites()
 
     let decoder = JSONDecoder()
 
