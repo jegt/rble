@@ -212,21 +212,96 @@ module RBLE
         address
       end
 
-      # GATT methods - stubs for Plan 05
+      # Read a characteristic value
+      # @param char_identifier [String] Format: "device_uuid:service_uuid:char_uuid"
+      # @param timeout [Numeric] Read timeout in seconds
+      # @return [String] Binary string (ASCII-8BIT encoding)
+      # @raise [ReadError] if read fails
       def read_characteristic(char_identifier, timeout: 30)
-        raise NotImplementedError, "#{self.class}#read_characteristic not yet implemented"
+        device_uuid, service_uuid, char_uuid = parse_char_identifier(char_identifier)
+
+        result = send_request('read_characteristic', {
+          device_uuid: device_uuid,
+          service_uuid: service_uuid,
+          char_uuid: char_uuid,
+          timeout: timeout
+        }, timeout: timeout + 5)
+
+        # Convert byte array to binary string
+        (result['value'] || []).map(&:to_i).pack('C*')
+      rescue StandardError => e
+        raise ReadError, translate_error(e)
       end
 
+      # Write a value to a characteristic
+      # @param char_identifier [String] Format: "device_uuid:service_uuid:char_uuid"
+      # @param data [String, Array<Integer>] Data to write
+      # @param response [Boolean] Wait for write response
+      # @param timeout [Numeric] Write timeout in seconds
+      # @return [Boolean] true on success
+      # @raise [WriteError] if write fails
       def write_characteristic(char_identifier, data, response: true, timeout: 30)
-        raise NotImplementedError, "#{self.class}#write_characteristic not yet implemented"
+        device_uuid, service_uuid, char_uuid = parse_char_identifier(char_identifier)
+
+        # Convert string to bytes array if needed
+        bytes = data.is_a?(String) ? data.bytes : data
+
+        send_request('write_characteristic', {
+          device_uuid: device_uuid,
+          service_uuid: service_uuid,
+          char_uuid: char_uuid,
+          value: bytes,
+          response: response,
+          timeout: timeout
+        }, timeout: timeout + 5)
+
+        true
+      rescue StandardError => e
+        raise WriteError, translate_error(e)
       end
 
-      def subscribe_characteristic(char_identifier, &block)
-        raise NotImplementedError, "#{self.class}#subscribe_characteristic not yet implemented"
+      # Subscribe to characteristic notifications
+      # @param char_identifier [String] Format: "device_uuid:service_uuid:char_uuid"
+      # @yield [String] Called with value (binary string) on each notification
+      # @return [Boolean] true on success
+      # @raise [NotifyError] if subscription fails
+      def subscribe_characteristic(char_identifier, &callback)
+        return true if @subscriptions.key?(char_identifier)
+
+        device_uuid, service_uuid, char_uuid = parse_char_identifier(char_identifier)
+
+        send_request('subscribe', {
+          device_uuid: device_uuid,
+          service_uuid: service_uuid,
+          char_uuid: char_uuid
+        }, timeout: 30)
+
+        @subscriptions[char_identifier] = callback
+        true
+      rescue StandardError => e
+        raise NotifyError, translate_error(e)
       end
 
+      # Unsubscribe from characteristic notifications
+      # @param char_identifier [String] Format: "device_uuid:service_uuid:char_uuid"
+      # @return [Boolean] true on success
       def unsubscribe_characteristic(char_identifier)
-        raise NotImplementedError, "#{self.class}#unsubscribe_characteristic not yet implemented"
+        callback = @subscriptions.delete(char_identifier)
+        return true unless callback
+
+        device_uuid, service_uuid, char_uuid = parse_char_identifier(char_identifier)
+
+        begin
+          send_request('unsubscribe', {
+            device_uuid: device_uuid,
+            service_uuid: service_uuid,
+            char_uuid: char_uuid
+          }, timeout: 5)
+        rescue StandardError
+          # Ignore errors during cleanup
+        end
+
+        true
       end
 
       private
@@ -250,11 +325,15 @@ module RBLE
       end
 
       def handle_async_event(event)
-        case event[:method]
+        case event[:method] || event['method']
         when 'device_discovered'
-          handle_device_discovered(event[:params])
+          handle_device_discovered(event[:params] || event['params'])
+        when 'notification'
+          handle_notification(event[:params] || event['params'])
         when 'state_changed'
           # Could notify app of BT state change
+        when 'connected', 'disconnected'
+          # Connection state events (handled via request/response)
         end
       end
 
@@ -341,6 +420,52 @@ module RBLE
           raise PermissionError, 'access Bluetooth on macOS'
         else
           raise Error, "#{message}#{platform_error ? " (#{platform_error})" : ''}"
+        end
+      end
+
+      # Handle notification event from subprocess
+      # @param params [Hash] Notification parameters from subprocess
+      def handle_notification(params)
+        return unless params
+
+        device_uuid = params['device_uuid']
+        service_uuid = params['service_uuid']
+        char_uuid = params['char_uuid']
+        value = params['value']
+
+        identifier = "#{device_uuid}:#{service_uuid}:#{char_uuid}"
+        callback = @subscriptions[identifier]
+        return unless callback
+
+        # Convert byte array to binary string
+        binary_value = (value || []).map(&:to_i).pack('C*')
+        callback.call(binary_value)
+      end
+
+      # Parse characteristic identifier into components
+      # @param identifier [String] Format: "device_uuid:service_uuid:char_uuid"
+      # @return [Array<String>] [device_uuid, service_uuid, char_uuid]
+      # @raise [ArgumentError] if identifier is invalid
+      def parse_char_identifier(identifier)
+        parts = identifier.split(':')
+        raise ArgumentError, "Invalid characteristic identifier: #{identifier}" unless parts.length == 3
+
+        parts
+      end
+
+      # Translate error messages to user-friendly format
+      # @param error [StandardError] The error to translate
+      # @return [String] Translated error message
+      def translate_error(error)
+        case error.message
+        when /not connected/i
+          'Device not connected'
+        when /characteristic not found/i
+          'Characteristic not found'
+        when /timeout/i
+          'Operation timed out'
+        else
+          error.message
         end
       end
     end
