@@ -144,6 +144,8 @@ module RBLE
 
       transition_to(:disconnecting)
       begin
+        # Unregister from backend before disconnect to avoid receiving our own disconnect event
+        @backend.unregister_connection(@device_path) if @backend.respond_to?(:unregister_connection)
         @backend.disconnect_device(@device_path)
       ensure
         transition_to(:disconnected, reason: :user_requested)
