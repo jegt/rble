@@ -52,7 +52,7 @@ module RBLE
 
       # Stop the event loop and wait for thread to finish
       # @param timeout [Numeric] Maximum seconds to wait for thread
-      def stop(timeout: 5)
+      def stop(timeout: 1)
         was_running = @mutex.synchronize do
           return unless @running
 
@@ -103,7 +103,13 @@ module RBLE
         deadline = timeout ? Time.now + timeout : nil
 
         loop do
-          remaining = deadline ? [deadline - Time.now, 0].max : nil
+          # Check deadline before waiting
+          if deadline
+            remaining = deadline - Time.now
+            return false if remaining <= 0
+          else
+            remaining = nil
+          end
 
           begin
             # pop with timeout returns nil on timeout (only in Ruby 3.2+)
