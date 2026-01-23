@@ -88,6 +88,49 @@ module RBLE
       def device_path_for_address(address, adapter: nil)
         raise NotImplementedError, "#{self.class}#device_path_for_address must be implemented"
       end
+
+      # GATT operations (implement in subclass)
+
+      # Read a characteristic value
+      #
+      # @param char_path [String] D-Bus characteristic path
+      # @param timeout [Numeric] Read timeout in seconds
+      # @return [String] Binary string (ASCII-8BIT encoding)
+      # @raise [NotImplementedError] if not implemented by subclass
+      def read_characteristic(char_path, timeout: 30)
+        raise NotImplementedError, "#{self.class}#read_characteristic must be implemented"
+      end
+
+      # Write a value to a characteristic
+      #
+      # @param char_path [String] D-Bus characteristic path
+      # @param data [String, Array<Integer>] Data to write
+      # @param response [Boolean] Wait for write response (true = write with response)
+      # @param timeout [Numeric] Write timeout in seconds
+      # @return [Boolean] true on success
+      # @raise [NotImplementedError] if not implemented by subclass
+      def write_characteristic(char_path, data, response: true, timeout: 30)
+        raise NotImplementedError, "#{self.class}#write_characteristic must be implemented"
+      end
+
+      # Subscribe to characteristic notifications
+      #
+      # @param char_path [String] D-Bus characteristic path
+      # @yield [String] Called with value (binary string) on each notification
+      # @return [Boolean] true on success
+      # @raise [NotImplementedError] if not implemented by subclass
+      def subscribe_characteristic(char_path, &)
+        raise NotImplementedError, "#{self.class}#subscribe_characteristic must be implemented"
+      end
+
+      # Unsubscribe from characteristic notifications
+      #
+      # @param char_path [String] D-Bus characteristic path
+      # @return [Boolean] true on success
+      # @raise [NotImplementedError] if not implemented by subclass
+      def unsubscribe_characteristic(char_path)
+        raise NotImplementedError, "#{self.class}#unsubscribe_characteristic must be implemented"
+      end
     end
   end
 end

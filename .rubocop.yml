@@ -35,3 +35,9 @@ Metrics/CyclomaticComplexity:
 Lint/MissingSuper:
   Exclude:
     - 'lib/rble/backend/bluez.rb'
+
+# unsubscribe_characteristic is an action method, not a predicate
+# (false positive due to method name starting with "un")
+Naming/PredicateMethod:
+  AllowedMethods:
+    - unsubscribe_characteristic
