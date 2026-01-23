@@ -22,6 +22,7 @@ Metrics/ClassLength:
 Metrics/MethodLength:
   Exclude:
     - 'lib/rble/backend/bluez.rb'
+    - 'lib/rble/connection.rb'
 
 Metrics/AbcSize:
   Exclude:

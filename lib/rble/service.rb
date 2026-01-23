@@ -5,7 +5,7 @@ module RBLE
   #
   # @!attribute uuid [String] Service UUID (128-bit format: "0000180d-0000-1000-8000-00805f9b34fb")
   # @!attribute primary [Boolean] True if primary service, false if secondary
-  # @!attribute characteristics [Array<Characteristic>] Characteristics in this service
+  # @!attribute characteristics [Array<Characteristic, ActiveCharacteristic>] Characteristics in this service
   Service = Data.define(:uuid, :primary, :characteristics) do
     def initialize(uuid:, primary: true, characteristics: [])
       super
@@ -22,7 +22,7 @@ module RBLE
 
     # Find a characteristic by UUID (supports short UUID like "2a37")
     # @param char_uuid [String] UUID to find
-    # @return [Characteristic, nil]
+    # @return [Characteristic, ActiveCharacteristic, nil]
     def characteristic(char_uuid)
       normalized = normalize_uuid(char_uuid)
       characteristics.find { |c| c.uuid.downcase == normalized || c.short_uuid == char_uuid.downcase }

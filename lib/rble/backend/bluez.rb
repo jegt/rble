@@ -651,7 +651,8 @@ module RBLE
 
       # Enumerate GATT services and characteristics for a device
       # @param device_path [String] Device path
-      # @return [Array<Service>] Services with characteristics
+      # @return [Array<Hash>] Service data with characteristics and their paths
+      #   Each hash contains: :uuid, :primary, :characteristics (array of {data:, path:})
       def enumerate_services(device_path)
         conn = ensure_connection
         om = conn.object_manager
@@ -674,23 +675,26 @@ module RBLE
             path.start_with?("#{service_path}/") && ifaces.key?(RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE)
           end
 
-          char_paths.each_value do |char_ifaces|
+          char_paths.each do |char_path, char_ifaces|
             char_props = char_ifaces[RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE]
             char_uuid = char_props['UUID']
             char_flags = char_props['Flags'] || []
 
-            characteristics << Characteristic.new(
-              uuid: char_uuid,
-              flags: char_flags,
-              service_uuid: service_uuid
-            )
+            characteristics << {
+              data: Characteristic.new(
+                uuid: char_uuid,
+                flags: char_flags,
+                service_uuid: service_uuid
+              ),
+              path: char_path
+            }
           end
 
-          services << Service.new(
+          services << {
             uuid: service_uuid,
             primary: service_primary,
             characteristics: characteristics
-          )
+          }
         end
 
         services

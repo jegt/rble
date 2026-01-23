@@ -39,13 +39,14 @@ module RBLE
     # Must be called before accessing services
     #
     # @param timeout [Numeric] Discovery timeout in seconds (default: 30)
-    # @return [Array<Service>] Discovered services
+    # @return [Array<Service>] Discovered services with ActiveCharacteristic instances
     # @raise [NotConnectedError] if not connected
     # @raise [ServiceDiscoveryError] if discovery fails
     def discover_services(timeout: 30)
       raise NotConnectedError unless @connected
 
-      @services = @backend.discover_services(@device_path, timeout: timeout)
+      raw_services = @backend.discover_services(@device_path, timeout: timeout)
+      @services = build_services_with_active_characteristics(raw_services)
     end
 
     # Get all discovered services
@@ -83,6 +84,28 @@ module RBLE
     end
 
     private
+
+    # Build Service objects with ActiveCharacteristic instances
+    # @param raw_services [Array<Hash>] Service data from backend
+    # @return [Array<Service>] Services with active characteristics
+    def build_services_with_active_characteristics(raw_services)
+      raw_services.map do |service_data|
+        characteristics = service_data[:characteristics].map do |char_info|
+          ActiveCharacteristic.new(
+            characteristic: char_info[:data],
+            path: char_info[:path],
+            connection: self,
+            backend: @backend
+          )
+        end
+
+        Service.new(
+          uuid: service_data[:uuid],
+          primary: service_data[:primary],
+          characteristics: characteristics
+        )
+      end
+    end
 
     # Normalize a short UUID to full 128-bit format
     # @param short_uuid [String] Short or full UUID
