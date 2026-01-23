@@ -67,7 +67,8 @@ func handleRequest(_ request: Request) -> Response? {
     case "adapters":
         return handleAdapters(request)
     case "scan_start":
-        return handleScanStart(request)
+        handleScanStart(request)
+        return nil // Response sent asynchronously
     case "scan_stop":
         return handleScanStop(request)
     case "connect":
@@ -121,31 +122,42 @@ func handleAdapters(_ request: Request) -> Response {
 /// Optional params:
 ///   - service_uuids: Array of service UUID strings to filter by
 ///   - allow_duplicates: Boolean to receive repeated advertisements
-func handleScanStart(_ request: Request) -> Response {
-    do {
-        // Extract optional parameters
-        let serviceUUIDs = request.params?["service_uuids"]?.value as? [String]
-        let allowDuplicates = request.params?["allow_duplicates"]?.value as? Bool ?? false
+func handleScanStart(_ request: Request) {
+    // Extract optional parameters
+    let serviceUUIDs = request.params?["service_uuids"]?.value as? [String]
+    let allowDuplicates = request.params?["allow_duplicates"]?.value as? Bool ?? false
 
-        try bleManager.startScan(serviceUUIDs: serviceUUIDs, allowDuplicates: allowDuplicates)
-
-        return Response.success(
-            id: request.id,
-            result: ["status": AnyCodable("started")]
-        )
-    } catch BLEError.notPoweredOn {
-        return Response.error(
-            id: request.id,
-            code: BLEErrorCode.notPoweredOn,
-            message: "Bluetooth not powered on",
-            data: ["platform_error": "CBManagerState.poweredOff"]
-        )
-    } catch {
-        return Response.error(
-            id: request.id,
-            code: ErrorCode.internalError,
-            message: error.localizedDescription
-        )
+    // Wait for Bluetooth to be powered on (CoreBluetooth needs time to initialize)
+    bleManager.waitForPoweredOn(timeout: 5) { ready in
+        if ready {
+            do {
+                try bleManager.startScan(serviceUUIDs: serviceUUIDs, allowDuplicates: allowDuplicates)
+                writeResponse(Response.success(
+                    id: request.id,
+                    result: ["status": AnyCodable("started")]
+                ))
+            } catch BLEError.notPoweredOn {
+                writeResponse(Response.error(
+                    id: request.id,
+                    code: BLEErrorCode.notPoweredOn,
+                    message: "Bluetooth not powered on",
+                    data: ["platform_error": "CBManagerState.poweredOff"]
+                ))
+            } catch {
+                writeResponse(Response.error(
+                    id: request.id,
+                    code: ErrorCode.internalError,
+                    message: error.localizedDescription
+                ))
+            }
+        } else {
+            writeResponse(Response.error(
+                id: request.id,
+                code: BLEErrorCode.notPoweredOn,
+                message: "Bluetooth not powered on",
+                data: ["platform_error": "CBManagerState.poweredOff"]
+            ))
+        }
     }
 }
 

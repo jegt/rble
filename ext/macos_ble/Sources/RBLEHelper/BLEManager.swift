@@ -88,9 +88,63 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         return centralManager.state == .poweredOn
     }
 
+    /// Callback for state changes (used for waitForPoweredOn)
+    private var stateChangeCallback: ((CBManagerState) -> Void)?
+
+    /// Wait for Bluetooth to be powered on
+    /// - Parameters:
+    ///   - timeout: Maximum time to wait in seconds
+    ///   - completion: Called with true if powered on, false if timeout or not available
+    func waitForPoweredOn(timeout: Int = 5, completion: @escaping (Bool) -> Void) {
+        // Already powered on?
+        if centralManager.state == .poweredOn {
+            completion(true)
+            return
+        }
+
+        // Already in a terminal non-powered state?
+        if centralManager.state == .unsupported ||
+           centralManager.state == .unauthorized ||
+           centralManager.state == .poweredOff {
+            completion(false)
+            return
+        }
+
+        // Wait for state change
+        var completed = false
+        let timeoutWorkItem = DispatchWorkItem {
+            if !completed {
+                completed = true
+                self.stateChangeCallback = nil
+                completion(false)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(timeout), execute: timeoutWorkItem)
+
+        stateChangeCallback = { newState in
+            if !completed {
+                if newState == .poweredOn {
+                    completed = true
+                    timeoutWorkItem.cancel()
+                    self.stateChangeCallback = nil
+                    completion(true)
+                } else if newState == .unsupported || newState == .unauthorized || newState == .poweredOff {
+                    completed = true
+                    timeoutWorkItem.cancel()
+                    self.stateChangeCallback = nil
+                    completion(false)
+                }
+                // For .unknown or .resetting, keep waiting
+            }
+        }
+    }
+
     // MARK: - CBCentralManagerDelegate
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        // Notify any waiters
+        stateChangeCallback?(central.state)
+
         let event = Event(
             method: "state_changed",
             params: ["state": AnyCodable(getState())]
