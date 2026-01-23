@@ -2,6 +2,7 @@
 
 require 'bundler/gem_tasks'
 require 'rspec/core/rake_task'
+require_relative 'lib/rble/tasks'
 
 RSpec::Core::RakeTask.new(:spec)
 
