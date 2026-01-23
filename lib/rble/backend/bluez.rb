@@ -783,8 +783,9 @@ module RBLE
         @signal_handlers.clear
       end
 
-      # Clean up scan-specific state only, preserving D-Bus connection for subsequent operations
-      # Called after stop_scan to allow connect without re-establishing connection
+      # Clean up scan-specific state, including D-Bus connection
+      # The connection must be closed because DBus::Main leaves state that prevents
+      # subsequent synchronous calls (send_sync) from working properly
       def stop_scan_cleanup
         # Stop scan event loop
         @event_loop&.stop
@@ -798,6 +799,12 @@ module RBLE
 
         unsubscribe_signal_handlers
         @scan_callback = nil
+
+        # Close the D-Bus connection - DBus::Main leaves state that breaks send_sync
+        # A fresh connection will be created for subsequent operations
+        @connection&.disconnect
+        @connection = nil
+        @adapter = nil
       end
 
       # Full cleanup - disconnects D-Bus connection and clears all state

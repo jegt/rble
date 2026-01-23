@@ -12,10 +12,12 @@ module RBLE
       end
 
       # Connect to D-Bus system bus
+      # Uses ASystemBus (non-singleton) to avoid state issues when switching between
+      # event loop processing (DBus::Main) and synchronous calls (send_sync)
       # @raise [PermissionError] if permission denied
       # @raise [Error] if BlueZ service not available
       def connect
-        @bus = DBus::SystemBus.instance
+        @bus = DBus::ASystemBus.new
         @service = @bus.service(BLUEZ_SERVICE)
       rescue DBus::Error => e
         if e.message.include?('AccessDenied') || e.message.include?('Permission')
