@@ -234,6 +234,64 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     func isConnected(uuid: String) -> Bool {
         return connectedPeripherals[uuid] != nil
     }
+
+    // MARK: - Service Discovery Methods
+
+    /// Discover services for a connected peripheral
+    /// - Parameters:
+    ///   - uuid: The peripheral's UUID string
+    ///   - completion: Callback with success/failure result
+    func discoverServices(uuid: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let peripheral = connectedPeripherals[uuid] else {
+            completion(.failure(BLEError.notConnected))
+            return
+        }
+
+        pendingServiceDiscovery[uuid] = completion
+        peripheral.discoverServices(nil) // Discover all services
+    }
+
+    /// Get discovered services and characteristics for a connected peripheral
+    /// - Parameter uuid: The peripheral's UUID string
+    /// - Returns: Array of service dictionaries with nested characteristics, or nil if not found
+    func getServices(uuid: String) -> [[String: Any]]? {
+        guard let peripheral = connectedPeripherals[uuid],
+              let services = peripheral.services else {
+            return nil
+        }
+
+        return services.map { service in
+            var serviceDict: [String: Any] = [
+                "uuid": service.uuid.uuidString,
+                "primary": service.isPrimary
+            ]
+
+            let characteristics: [[String: Any]] = (service.characteristics ?? []).map { char in
+                [
+                    "uuid": char.uuid.uuidString,
+                    "properties": characteristicPropertiesToFlags(char.properties),
+                    "service_uuid": service.uuid.uuidString
+                ]
+            }
+            serviceDict["characteristics"] = characteristics
+
+            return serviceDict
+        }
+    }
+
+    /// Convert CBCharacteristicProperties to array of string flags
+    private func characteristicPropertiesToFlags(_ properties: CBCharacteristicProperties) -> [String] {
+        var flags: [String] = []
+        if properties.contains(.read) { flags.append("read") }
+        if properties.contains(.write) { flags.append("write") }
+        if properties.contains(.writeWithoutResponse) { flags.append("write-without-response") }
+        if properties.contains(.notify) { flags.append("notify") }
+        if properties.contains(.indicate) { flags.append("indicate") }
+        if properties.contains(.broadcast) { flags.append("broadcast") }
+        if properties.contains(.authenticatedSignedWrites) { flags.append("authenticated-signed-writes") }
+        if properties.contains(.extendedProperties) { flags.append("extended-properties") }
+        return flags
+    }
 }
 
 // MARK: - CBPeripheralDelegate
