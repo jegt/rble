@@ -252,15 +252,59 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         let uuid = peripheral.identifier.uuidString.uppercased()
         connectedPeripherals.removeValue(forKey: uuid)
 
+        // Map error to reason
+        let reason = mapDisconnectReason(error)
+
         if let completion = pendingDisconnects.removeValue(forKey: uuid) {
             completion()
         }
 
         let event = Event(method: "disconnected", params: [
             "uuid": AnyCodable(uuid),
+            "reason": AnyCodable(reason),
             "error": AnyCodable(error?.localizedDescription as Any)
         ])
         onEvent?(event)
+    }
+
+    // MARK: - Disconnect Reason Mapping
+
+    /// Map CoreBluetooth error to disconnect reason string
+    /// - Parameter error: The error from didDisconnectPeripheral
+    /// - Returns: String reason for disconnect event
+    private func mapDisconnectReason(_ error: Error?) -> String {
+        guard let error = error else {
+            return "user_requested"
+        }
+
+        if let cbError = error as? CBError {
+            switch cbError.code {
+            case .connectionTimeout:
+                return "timeout"
+            case .peripheralDisconnected:
+                return "remote_disconnect"
+            case .connectionFailed:
+                return "connection_failed"
+            default:
+                return "unknown"
+            }
+        }
+
+        // Check for NSError with CoreBluetooth domain
+        let nsError = error as NSError
+        if nsError.domain == CBErrorDomain {
+            switch nsError.code {
+            case 6:  // CBErrorConnectionTimeout
+                return "timeout"
+            case 7:  // CBErrorPeripheralDisconnected
+                return "remote_disconnect"
+            default:
+                return "unknown"
+            }
+        }
+
+        // Generic error - likely link loss
+        return "link_loss"
     }
 
     // MARK: - Connection Methods
