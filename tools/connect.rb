@@ -5,7 +5,7 @@
   # Step 1: Scan to discover the device
   puts "Scanning for #{address}..."
   found = false
-  RBLE.scan(timeout: 10) do |device|
+  RBLE.scan(timeout: 10, allow_duplicates: false) do |device|
     if device.address == address
       puts "Found device: #{device.name || 'unnamed'}"
       found = true

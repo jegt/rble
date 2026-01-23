@@ -10,6 +10,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     private var isScanning = false
     private var allowDuplicates = false
     private var serviceUUIDs: [CBUUID]?
+    private var reportedPeripherals: Set<String> = [] // Track already-reported UUIDs when !allowDuplicates
 
     // Peripheral tracking
     private var discoveredPeripherals: [String: CBPeripheral] = [:] // UUID -> peripheral
@@ -50,11 +51,11 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
 
         self.allowDuplicates = allowDuplicates
         self.serviceUUIDs = serviceUUIDs?.map { CBUUID(string: $0) }
+        self.reportedPeripherals = [] // Reset for new scan
 
-        var options: [String: Any] = [:]
-        if allowDuplicates {
-            options[CBCentralManagerScanOptionAllowDuplicatesKey] = true
-        }
+        let options: [String: Any] = [
+            CBCentralManagerScanOptionAllowDuplicatesKey: allowDuplicates
+        ]
 
         centralManager.scanForPeripherals(
             withServices: self.serviceUUIDs,
@@ -158,8 +159,18 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         advertisementData: [String: Any],
         rssi RSSI: NSNumber
     ) {
-        // Store discovered peripheral for later connection (uppercase for consistent lookup)
-        discoveredPeripherals[peripheral.identifier.uuidString.uppercased()] = peripheral
+        let uuid = peripheral.identifier.uuidString.uppercased()
+
+        // Store discovered peripheral for later connection
+        discoveredPeripherals[uuid] = peripheral
+
+        // When allowDuplicates is false, only report each peripheral once
+        if !allowDuplicates {
+            if reportedPeripherals.contains(uuid) {
+                return // Already reported this peripheral
+            }
+            reportedPeripherals.insert(uuid)
+        }
 
         // Build device info dictionary
         var params: [String: AnyCodable] = [
@@ -261,6 +272,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     func connect(uuid: String, completion: @escaping (Result<Void, Error>) -> Void) {
         // Normalize UUID to uppercase for consistent lookup
         let normalizedUUID = uuid.uppercased()
+
         guard let peripheral = discoveredPeripherals[normalizedUUID] else {
             completion(.failure(BLEError.deviceNotFound))
             return
