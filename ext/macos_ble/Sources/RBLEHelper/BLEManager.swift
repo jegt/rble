@@ -11,6 +11,16 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
     private var allowDuplicates = false
     private var serviceUUIDs: [CBUUID]?
 
+    // Peripheral tracking
+    private var discoveredPeripherals: [String: CBPeripheral] = [:] // UUID -> peripheral
+    private var connectedPeripherals: [String: CBPeripheral] = [:]
+    private var pendingConnections: [String: (Result<Void, Error>) -> Void] = [:] // UUID -> completion
+    private var pendingDisconnects: [String: () -> Void] = [:]
+
+    // Service discovery tracking
+    private var pendingServiceDiscovery: [String: (Result<Void, Error>) -> Void] = [:]
+    private var pendingCharacteristicDiscovery: [String: Int] = [:] // UUID -> remaining services
+
     /// Callback to send events to stdout
     var onEvent: ((Event) -> Void)?
 
@@ -89,6 +99,9 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         advertisementData: [String: Any],
         rssi RSSI: NSNumber
     ) {
+        // Store discovered peripheral for later connection
+        discoveredPeripherals[peripheral.identifier.uuidString] = peripheral
+
         // Build device info dictionary
         var params: [String: AnyCodable] = [
             "uuid": AnyCodable(peripheral.identifier.uuidString),
@@ -140,6 +153,135 @@ class BLEManager: NSObject, CBCentralManagerDelegate {
         let event = Event(method: "device_discovered", params: params)
         onEvent?(event)
     }
+
+    // MARK: - CBCentralManagerDelegate - Connection
+
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        let uuid = peripheral.identifier.uuidString
+        connectedPeripherals[uuid] = peripheral
+        peripheral.delegate = self
+
+        // Notify pending connection
+        if let completion = pendingConnections.removeValue(forKey: uuid) {
+            completion(.success(()))
+        }
+
+        // Emit event
+        let event = Event(method: "connected", params: ["uuid": AnyCodable(uuid)])
+        onEvent?(event)
+    }
+
+    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        let uuid = peripheral.identifier.uuidString
+        if let completion = pendingConnections.removeValue(forKey: uuid) {
+            completion(.failure(error ?? BLEError.connectionFailed))
+        }
+    }
+
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        let uuid = peripheral.identifier.uuidString
+        connectedPeripherals.removeValue(forKey: uuid)
+
+        if let completion = pendingDisconnects.removeValue(forKey: uuid) {
+            completion()
+        }
+
+        let event = Event(method: "disconnected", params: [
+            "uuid": AnyCodable(uuid),
+            "error": AnyCodable(error?.localizedDescription as Any)
+        ])
+        onEvent?(event)
+    }
+
+    // MARK: - Connection Methods
+
+    /// Connect to a peripheral by UUID
+    /// - Parameters:
+    ///   - uuid: The peripheral's UUID string
+    ///   - completion: Callback with success/failure result
+    func connect(uuid: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let peripheral = discoveredPeripherals[uuid] else {
+            completion(.failure(BLEError.deviceNotFound))
+            return
+        }
+
+        guard centralManager.state == .poweredOn else {
+            completion(.failure(BLEError.notPoweredOn))
+            return
+        }
+
+        pendingConnections[uuid] = completion
+        centralManager.connect(peripheral, options: nil)
+    }
+
+    /// Disconnect from a peripheral
+    /// - Parameters:
+    ///   - uuid: The peripheral's UUID string
+    ///   - completion: Callback when disconnection completes
+    func disconnect(uuid: String, completion: @escaping () -> Void) {
+        guard let peripheral = connectedPeripherals[uuid] else {
+            completion()
+            return
+        }
+
+        pendingDisconnects[uuid] = completion
+        centralManager.cancelPeripheralConnection(peripheral)
+    }
+
+    /// Check if a peripheral is connected
+    /// - Parameter uuid: The peripheral's UUID string
+    /// - Returns: True if connected
+    func isConnected(uuid: String) -> Bool {
+        return connectedPeripherals[uuid] != nil
+    }
+}
+
+// MARK: - CBPeripheralDelegate
+
+extension BLEManager: CBPeripheralDelegate {
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        let uuid = peripheral.identifier.uuidString
+
+        if let error = error {
+            if let completion = pendingServiceDiscovery.removeValue(forKey: uuid) {
+                completion(.failure(error))
+            }
+            return
+        }
+
+        // Discover characteristics for each service
+        guard let services = peripheral.services, !services.isEmpty else {
+            // No services found, complete immediately
+            if let completion = pendingServiceDiscovery.removeValue(forKey: uuid) {
+                completion(.success(()))
+            }
+            return
+        }
+
+        pendingCharacteristicDiscovery[uuid] = services.count
+
+        for service in services {
+            peripheral.discoverCharacteristics(nil, for: service)
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        let uuid = peripheral.identifier.uuidString
+
+        // Decrement pending count
+        if var remaining = pendingCharacteristicDiscovery[uuid] {
+            remaining -= 1
+            pendingCharacteristicDiscovery[uuid] = remaining
+
+            // All services discovered?
+            if remaining == 0 {
+                pendingCharacteristicDiscovery.removeValue(forKey: uuid)
+                if let completion = pendingServiceDiscovery.removeValue(forKey: uuid) {
+                    completion(.success(()))
+                }
+            }
+        }
+    }
 }
 
 // MARK: - BLE Errors
@@ -150,6 +292,9 @@ enum BLEError: Error {
     case notConnected
     case timeout
     case invalidUUID(String)
+    case deviceNotFound
+    case connectionFailed
+    case serviceDiscoveryFailed
 
     var localizedDescription: String {
         switch self {
@@ -161,6 +306,12 @@ enum BLEError: Error {
             return "Operation timed out"
         case .invalidUUID(let uuid):
             return "Invalid UUID: \(uuid)"
+        case .deviceNotFound:
+            return "Device not found (must scan first)"
+        case .connectionFailed:
+            return "Connection failed"
+        case .serviceDiscoveryFailed:
+            return "Service discovery failed"
         }
     }
 }
@@ -174,4 +325,7 @@ enum BLEErrorCode {
     static let timeout = -3
     static let invalidUUID = -4
     static let operationFailed = -5
+    static let deviceNotFound = -6
+    static let connectionFailed = -7
+    static let serviceDiscoveryFailed = -8
 }
