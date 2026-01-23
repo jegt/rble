@@ -617,8 +617,10 @@ module RBLE
 
         @known_devices[path] = device
 
-        # Subscribe to property changes for this device
-        subscribe_to_device_properties(path) if is_new
+        # Subscribe to property changes for this device (only if monitoring updates)
+        # Skip subscription when not needed - on_signal makes synchronous D-Bus calls
+        # that can block/deadlock when called from within the event loop
+        subscribe_to_device_properties(path) if is_new && @allow_duplicates
 
         # Callback if new device or allow_duplicates
         return unless is_new || @allow_duplicates
