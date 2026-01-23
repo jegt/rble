@@ -78,7 +78,8 @@ module RBLE
           # Ignore errors during cleanup
         end
 
-        cleanup
+        # Only clean up scan-specific state, preserve D-Bus connection for subsequent operations
+        stop_scan_cleanup
       end
 
       # Check if scanning
@@ -534,6 +535,9 @@ module RBLE
       end
 
       def setup_connection
+        # Reuse existing D-Bus connection if available
+        return if @connection
+
         @connection = RBLE::BlueZ::DBusConnection.new
         @connection.connect
       end
@@ -761,8 +765,28 @@ module RBLE
         end
       end
 
+      # Clean up scan-specific state only, preserving D-Bus connection for subsequent operations
+      # Called after stop_scan to allow connect without re-establishing connection
+      def stop_scan_cleanup
+        # Stop scan event loop
+        @event_loop&.stop
+        @event_loop = nil
+
+        # Clear scan-specific state only
+        @state_mutex.synchronize do
+          @scanning = false
+          @known_devices.clear
+        end
+
+        # Clear scan-specific signal handlers (keep disconnect monitoring handlers)
+        @signal_handlers.clear
+        @scan_callback = nil
+      end
+
+      # Full cleanup - disconnects D-Bus connection and clears all state
+      # Called on errors or when backend needs to be completely reset
       def cleanup
-        # Stop event loop first (before clearing state it might access)
+        # Stop all event loops
         @event_loop&.stop
         @event_loop = nil
         stop_monitoring_loop
