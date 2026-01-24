@@ -119,6 +119,11 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
         }
         return nil  // Response written async
 
+    case "get_state":
+        // For now, if we got past validatePrerequisites, we're ready
+        // Future: could check if adapter is still available
+        return Response.success(id: request.id, result: ["state": AnyCodable("powered_on")])
+
     default:
         return Response.error(
             id: request.id,
