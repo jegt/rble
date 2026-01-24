@@ -238,6 +238,40 @@ class BLEManager {
         }
     }
 
+    /// Disconnect from a connected peripheral
+    /// - Parameter address: The MAC address string
+    func disconnect(address: String) async throws {
+        let normalizedAddress = address.uppercased()
+
+        guard let bluetoothAddress = BluetoothAddress(rawValue: normalizedAddress) else {
+            throw LinuxBLEError.notConnected(normalizedAddress)
+        }
+
+        guard var connectionState = connections[bluetoothAddress] else {
+            throw LinuxBLEError.notConnected(normalizedAddress)
+        }
+
+        // Mark as intentional disconnect (Pitfall 4 from research)
+        connectionState.intentionalDisconnect = true
+        connections[bluetoothAddress] = connectionState
+
+        guard let central = central else {
+            throw LinuxBLEError.adapterNotFound
+        }
+
+        // Cancel monitoring task
+        connectionState.monitorTask.cancel()
+
+        // Disconnect from peripheral
+        await central.disconnect(connectionState.peripheral)
+
+        // Remove from connections
+        connections.removeValue(forKey: bluetoothAddress)
+
+        // Emit disconnected event with user_requested reason
+        emitDisconnectEvent(address: normalizedAddress, reason: "user_requested", error: nil)
+    }
+
     // MARK: - Private Methods
 
     /// Monitor a connection for unexpected disconnect
@@ -397,6 +431,10 @@ class BLEManager {
     }
 
     func connect(address: String, timeout: TimeInterval = 30) async throws {
+        // No-op on macOS
+    }
+
+    func disconnect(address: String) async throws {
         // No-op on macOS
     }
 }
