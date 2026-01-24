@@ -66,6 +66,16 @@ func mapLinuxBLEError(_ error: LinuxBLEError) -> (code: Int, message: String) {
         return (BLEErrorCode.notPoweredOn, "Bluetooth adapter is not powered on")
     case .scanningFailed(let underlying):
         return (BLEErrorCode.operationFailed, "Scanning failed: \(underlying)")
+    case .deviceNotFound(let address):
+        return (BLEErrorCode.deviceNotFound, "Device not found: \(address). Ensure the device is in range and discoverable.")
+    case .connectionFailed(let underlying):
+        return (BLEErrorCode.connectionFailed, "Connection failed: \(underlying)")
+    case .connectionTimeout:
+        return (BLEErrorCode.timeout, "Connection timed out")
+    case .alreadyConnecting(let address):
+        return (BLEErrorCode.operationFailed, "Already connecting to: \(address)")
+    case .notConnected(let address):
+        return (BLEErrorCode.notConnected, "Not connected to: \(address)")
     }
 }
 
@@ -89,33 +99,29 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
         let allowDuplicates = (request.params?["allow_duplicates"]?.value as? Bool) ?? false
         // Extract timeout parameter (in seconds, as Double/TimeInterval)
         let timeout = request.params?["timeout"]?.value as? Double
+        // Capture request ID to avoid Sendable issues with request struct
+        let requestId = request.id
 
-        // Dispatch async scan
-        Task {
+        // Dispatch async scan using @MainActor task for Swift 6 concurrency safety
+        Task { @MainActor in
             do {
                 try await bleManager.startScan(serviceUUIDs: serviceUUIDs, allowDuplicates: allowDuplicates, timeout: timeout)
-                DispatchQueue.main.async {
-                    writeResponse(Response.success(id: request.id, result: ["scanning": AnyCodable(true)]))
-                }
+                writeResponse(Response.success(id: requestId, result: ["scanning": AnyCodable(true)]))
             } catch let error as LinuxBLEError {
-                DispatchQueue.main.async {
-                    let (code, message) = mapLinuxBLEError(error)
-                    writeResponse(Response.error(id: request.id, code: code, message: message))
-                }
+                let (code, message) = mapLinuxBLEError(error)
+                writeResponse(Response.error(id: requestId, code: code, message: message))
             } catch {
-                DispatchQueue.main.async {
-                    writeResponse(Response.error(id: request.id, code: BLEErrorCode.operationFailed, message: "Scan failed: \(error)"))
-                }
+                writeResponse(Response.error(id: requestId, code: BLEErrorCode.operationFailed, message: "Scan failed: \(error)"))
             }
         }
         return nil  // Response written async
 
     case "stop_scan":
-        Task {
+        // Capture request ID to avoid Sendable issues with request struct
+        let requestId = request.id
+        Task { @MainActor in
             await bleManager.stopScan()
-            DispatchQueue.main.async {
-                writeResponse(Response.success(id: request.id, result: ["stopped": AnyCodable(true)]))
-            }
+            writeResponse(Response.success(id: requestId, result: ["stopped": AnyCodable(true)]))
         }
         return nil  // Response written async
 
@@ -180,6 +186,7 @@ func validatePrerequisites() {
 
 // MARK: - Main Entry Point
 
+@MainActor
 func main() {
     // Note: FileHandle.standardOutput used in writeToStdout handles buffering appropriately
 

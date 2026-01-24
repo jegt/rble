@@ -11,6 +11,15 @@ import GATT
 /// Must fully qualify BluetoothLinux.L2CAPSocket to avoid conflict with Bluetooth.L2CAPSocket protocol
 typealias LinuxCentral = GATTCentral<HostController, BluetoothLinux.L2CAPSocket.Connection>
 
+// MARK: - Connection State
+
+/// Tracks an active connection and its monitoring task
+struct ConnectionState {
+    let peripheral: LinuxCentral.Peripheral
+    let monitorTask: Task<Void, Never>
+    var intentionalDisconnect: Bool = false  // Flag to distinguish user vs unexpected disconnect
+}
+
 // MARK: - BLEManager
 
 /// BluetoothLinux wrapper that manages Bluetooth scanning and device discovery.
@@ -29,6 +38,12 @@ class BLEManager {
     private var reportedPeripherals: Set<BluetoothAddress> = []
     private var allowDuplicates = false
     private var filterServiceUUIDs: [String]? = nil
+
+    /// Active connections keyed by BluetoothAddress
+    private var connections: [BluetoothAddress: ConnectionState] = [:]
+
+    /// Track connection attempts in progress (address -> timeout workItem)
+    private var connectingAddresses: [BluetoothAddress: DispatchWorkItem] = [:]
 
     /// Callback to send events to stdout
     var onEvent: ((Event) -> Void)?
@@ -198,6 +213,11 @@ enum LinuxBLEError: Error {
     case adapterNotFound
     case notPoweredOn
     case scanningFailed(Error)
+    case deviceNotFound(String)      // Device address not in scan cache
+    case connectionFailed(Error)     // GATTCentral.connect failed
+    case connectionTimeout           // Connection attempt timed out
+    case alreadyConnecting(String)   // Connection already in progress for this address
+    case notConnected(String)        // Disconnect called but not connected
 
     var localizedDescription: String {
         switch self {
@@ -207,6 +227,16 @@ enum LinuxBLEError: Error {
             return "Bluetooth not powered on"
         case .scanningFailed(let error):
             return "Scanning failed: \(error)"
+        case .deviceNotFound(let address):
+            return "Device not found: \(address)"
+        case .connectionFailed(let error):
+            return "Connection failed: \(error)"
+        case .connectionTimeout:
+            return "Connection timeout"
+        case .alreadyConnecting(let address):
+            return "Already connecting to: \(address)"
+        case .notConnected(let address):
+            return "Not connected to: \(address)"
         }
     }
 }
@@ -234,6 +264,11 @@ enum LinuxBLEError: Error {
     case adapterNotFound
     case notPoweredOn
     case scanningFailed(Error)
+    case deviceNotFound(String)
+    case connectionFailed(Error)
+    case connectionTimeout
+    case alreadyConnecting(String)
+    case notConnected(String)
 }
 
 #endif
