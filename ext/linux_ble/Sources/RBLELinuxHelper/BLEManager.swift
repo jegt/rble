@@ -148,7 +148,144 @@ class BLEManager {
         scanTask = nil
     }
 
+    // MARK: - Connection Methods
+
+    /// Connect to a peripheral by its MAC address
+    /// - Parameters:
+    ///   - address: The MAC address string (e.g., "AA:BB:CC:DD:EE:FF")
+    ///   - timeout: Connection timeout in seconds (default 30)
+    /// - Throws: LinuxBLEError if connection fails
+    func connect(address: String, timeout: TimeInterval = 30) async throws {
+        // Normalize address to uppercase (Pitfall 5 from research)
+        let normalizedAddress = address.uppercased()
+
+        guard let bluetoothAddress = BluetoothAddress(rawValue: normalizedAddress) else {
+            throw LinuxBLEError.deviceNotFound(normalizedAddress)
+        }
+
+        // Check if already connected (idempotent success)
+        if connections[bluetoothAddress] != nil {
+            return
+        }
+
+        // Check if connection already in progress (Pitfall 3)
+        if connectingAddresses[bluetoothAddress] != nil {
+            throw LinuxBLEError.alreadyConnecting(normalizedAddress)
+        }
+
+        try await ensureInitialized()
+
+        guard let central = central else {
+            throw LinuxBLEError.adapterNotFound
+        }
+
+        // Find peripheral in scan cache (Pitfall 1 from research)
+        // central.peripherals returns [Peripheral: Bool] where key is peripheral, value is connection status
+        let peripherals = await central.peripherals
+        guard let peripheral = peripherals.keys.first(where: { $0.id == bluetoothAddress }) else {
+            throw LinuxBLEError.deviceNotFound(normalizedAddress)
+        }
+
+        // Set up timeout (Pitfall 2 - must cancel on success/failure)
+        var timedOut = false
+        let timeoutWorkItem = DispatchWorkItem { [weak self] in
+            timedOut = true
+            self?.connectingAddresses.removeValue(forKey: bluetoothAddress)
+            // Note: Cannot cancel in-flight connect, but we'll check timedOut flag
+        }
+        connectingAddresses[bluetoothAddress] = timeoutWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
+
+        do {
+            try await central.connect(to: peripheral)
+
+            // Cancel timeout on success
+            timeoutWorkItem.cancel()
+            connectingAddresses.removeValue(forKey: bluetoothAddress)
+
+            // Check if timed out while connecting
+            if timedOut {
+                // Disconnect since we told Ruby it timed out
+                await central.disconnect(peripheral)
+                throw LinuxBLEError.connectionTimeout
+            }
+
+            // Start monitoring task for disconnect detection
+            let monitorTask = Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                await self.monitorConnection(peripheral: peripheral, address: bluetoothAddress)
+            }
+
+            connections[bluetoothAddress] = ConnectionState(
+                peripheral: peripheral,
+                monitorTask: monitorTask
+            )
+
+            // Emit connected event
+            let event = Event(method: "connected", params: [
+                "uuid": AnyCodable(normalizedAddress)
+            ])
+            onEvent?(event)
+
+        } catch let error as LinuxBLEError {
+            timeoutWorkItem.cancel()
+            connectingAddresses.removeValue(forKey: bluetoothAddress)
+            throw error
+        } catch {
+            timeoutWorkItem.cancel()
+            connectingAddresses.removeValue(forKey: bluetoothAddress)
+            throw LinuxBLEError.connectionFailed(error)
+        }
+    }
+
     // MARK: - Private Methods
+
+    /// Monitor a connection for unexpected disconnect
+    /// This runs in a Task and detects when the connection drops
+    private func monitorConnection(peripheral: LinuxCentral.Peripheral, address: BluetoothAddress) async {
+        guard let central = central else { return }
+
+        // Poll for connection status
+        // GATTCentral doesn't expose a stream for disconnect events,
+        // so we check if peripheral is still in connected set
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+
+            // Check if still in our connections dict (may have been removed by disconnect())
+            guard let connectionState = connections[address] else {
+                return  // Already handled by explicit disconnect
+            }
+
+            // Check if peripheral still connected via GATTCentral
+            // peripherals dict has Bool value indicating connection status
+            let peripherals = await central.peripherals
+            let stillConnected = peripherals[peripheral] ?? false
+
+            if !stillConnected {
+                // Unexpected disconnect detected
+                connections.removeValue(forKey: address)
+
+                let reason = connectionState.intentionalDisconnect ? "user_requested" : "link_loss"
+                emitDisconnectEvent(address: address.rawValue.uppercased(), reason: reason, error: nil)
+                return
+            }
+        }
+    }
+
+    /// Emit a disconnected event
+    private func emitDisconnectEvent(address: String, reason: String, error: String?) {
+        var params: [String: AnyCodable] = [
+            "uuid": AnyCodable(address),
+            "reason": AnyCodable(reason)
+        ]
+        if let error = error {
+            params["error"] = AnyCodable(error)
+        }
+        let event = Event(method: "disconnected", params: params)
+        onEvent?(event)
+    }
+
+    // MARK: - Scan Data Conversion
 
     /// Convert BluetoothLinux ScanData to Event matching macOS format exactly
     /// - Parameter scanData: The scan data from BluetoothLinux
@@ -256,6 +393,10 @@ class BLEManager {
     }
 
     func stopScan() {
+        // No-op on macOS
+    }
+
+    func connect(address: String, timeout: TimeInterval = 30) async throws {
         // No-op on macOS
     }
 }
