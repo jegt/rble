@@ -244,7 +244,7 @@ class BLEManager {
 
             // Emit connected event
             let event = Event(method: "connected", params: [
-                "uuid": AnyCodable(normalizedAddress)
+                "address": AnyCodable(normalizedAddress)
             ])
             onEvent?(event)
 
@@ -575,7 +575,7 @@ class BLEManager {
                     let event = Event(
                         method: "notification",
                         params: [
-                            "device_uuid": AnyCodable(normalizedAddress),
+                            "device_address": AnyCodable(normalizedAddress),
                             "service_uuid": AnyCodable(serviceUUIDStr),
                             "char_uuid": AnyCodable(charUUIDStr),
                             "value": AnyCodable(Array(data).map { Int($0) })
@@ -706,7 +706,7 @@ class BLEManager {
     /// Emit a disconnected event
     private func emitDisconnectEvent(address: String, reason: String, error: String?) {
         var params: [String: AnyCodable] = [
-            "uuid": AnyCodable(address),
+            "address": AnyCodable(address),
             "reason": AnyCodable(reason)
         ]
         if let error = error {
@@ -727,7 +727,7 @@ class BLEManager {
             // Linux uses MAC address format (XX:XX:XX:XX:XX:XX), not UUID like macOS
             // Uppercase for consistency with macOS UUID format
             // peripheral.id is BluetoothAddress, .rawValue gives the "XX:XX:XX:XX:XX:XX" string
-            "uuid": AnyCodable(scanData.peripheral.id.rawValue.uppercased()),
+            "address": AnyCodable(scanData.peripheral.id.rawValue.uppercased()),
             "rssi": AnyCodable(Int(scanData.rssi))
         ]
 
