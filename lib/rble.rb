@@ -10,5 +10,21 @@ require_relative 'rble/scanner'
 require_relative 'rble/connection'
 
 module RBLE
-  # Main module for RBLE BLE library
+  # Backend selection API - delegates to RBLE::Backend
+
+  def self.backend
+    Backend.backend
+  end
+
+  def self.backend=(value)
+    Backend.backend = value
+  end
+
+  def self.available_backends
+    Backend.available_backends
+  end
+
+  def self.backend_info
+    Backend.backend_info
+  end
 end
