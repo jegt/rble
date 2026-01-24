@@ -618,6 +618,34 @@ class BLEManager {
         notificationTasks.removeValue(forKey: key)
     }
 
+    // MARK: - Adapter Methods
+
+    /// Get available Bluetooth adapters
+    /// - Returns: Array of adapter info dictionaries
+    func getAdapters() async -> [[String: Any]] {
+        let controllers = await HostController.controllers
+
+        if controllers.isEmpty {
+            return []
+        }
+
+        var adapters: [[String: Any]] = []
+        for (index, controller) in controllers.enumerated() {
+            // Get adapter address if available (readDeviceAddress is async)
+            var address: String? = nil
+            if let addr = try? await controller.readDeviceAddress() {
+                address = addr.rawValue.uppercased()
+            }
+
+            adapters.append([
+                "name": "hci\(index)",
+                "address": address as Any,
+                "powered": true  // If we got here, adapter is available
+            ])
+        }
+        return adapters
+    }
+
     // MARK: - Private Methods
 
     /// Cancel all notification subscriptions for a device
@@ -842,6 +870,11 @@ class BLEManager {
 
     func disconnect(address: String) async throws {
         // No-op on macOS
+    }
+
+    func getAdapters() async -> [[String: Any]] {
+        // macOS stub returns empty - real implementation requires BluetoothLinux
+        return []
     }
 }
 

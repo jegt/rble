@@ -345,6 +345,17 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
         }
         return nil  // Response written async
 
+    case "adapters":
+        // Capture request ID to avoid Sendable issues with request struct
+        let adaptersRequestId = request.id
+
+        // Dispatch async on MainActor
+        Task { @MainActor in
+            let adapters = await bleManager.getAdapters()
+            writeResponse(Response.success(id: adaptersRequestId, result: ["adapters": AnyCodable(adapters)]))
+        }
+        return nil  // Response written async
+
     default:
         return Response.error(
             id: request.id,
