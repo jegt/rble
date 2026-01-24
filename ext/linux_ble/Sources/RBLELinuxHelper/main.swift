@@ -130,6 +130,71 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
         // Future: could check if adapter is still available
         return Response.success(id: request.id, result: ["state": AnyCodable("powered_on")])
 
+    case "connect":
+        // Extract required address parameter
+        guard let address = request.params?["address"]?.value as? String else {
+            return Response.error(
+                id: request.id,
+                code: ErrorCode.invalidParams,
+                message: "Missing required parameter: address"
+            )
+        }
+
+        // Extract optional timeout parameter (default: 30 seconds)
+        let timeout = request.params?["timeout"]?.value as? Double ?? 30.0
+
+        // Capture request ID to avoid Sendable issues with request struct
+        let connectRequestId = request.id
+
+        // Dispatch async connection
+        Task { @MainActor in
+            do {
+                try await bleManager.connect(address: address, timeout: timeout)
+                writeResponse(Response.success(id: connectRequestId, result: ["connected": AnyCodable(true)]))
+            } catch let error as LinuxBLEError {
+                let (code, message) = mapLinuxBLEError(error)
+                writeResponse(Response.error(id: connectRequestId, code: code, message: message))
+            } catch {
+                writeResponse(Response.error(
+                    id: connectRequestId,
+                    code: BLEErrorCode.connectionFailed,
+                    message: "Connection failed: \(error)"
+                ))
+            }
+        }
+        return nil  // Response written async
+
+    case "disconnect":
+        // Extract required address parameter
+        guard let address = request.params?["address"]?.value as? String else {
+            return Response.error(
+                id: request.id,
+                code: ErrorCode.invalidParams,
+                message: "Missing required parameter: address"
+            )
+        }
+
+        // Capture request ID to avoid Sendable issues with request struct
+        let disconnectRequestId = request.id
+
+        // Dispatch async disconnect
+        Task { @MainActor in
+            do {
+                try await bleManager.disconnect(address: address)
+                writeResponse(Response.success(id: disconnectRequestId, result: ["disconnected": AnyCodable(true)]))
+            } catch let error as LinuxBLEError {
+                let (code, message) = mapLinuxBLEError(error)
+                writeResponse(Response.error(id: disconnectRequestId, code: code, message: message))
+            } catch {
+                writeResponse(Response.error(
+                    id: disconnectRequestId,
+                    code: BLEErrorCode.operationFailed,
+                    message: "Disconnect failed: \(error)"
+                ))
+            }
+        }
+        return nil  // Response written async
+
     default:
         return Response.error(
             id: request.id,
