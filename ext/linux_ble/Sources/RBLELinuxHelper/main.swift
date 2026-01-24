@@ -234,13 +234,13 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
 
     case "read_characteristic":
         // Extract required parameters
-        guard let deviceUUID = request.params?["device_uuid"]?.value as? String,
+        guard let deviceAddress = request.params?["device_address"]?.value as? String,
               let serviceUUID = request.params?["service_uuid"]?.value as? String,
               let charUUID = request.params?["char_uuid"]?.value as? String else {
             return Response.error(
                 id: request.id,
                 code: ErrorCode.invalidParams,
-                message: "Missing required params: device_uuid, service_uuid, char_uuid"
+                message: "Missing required params: device_address, service_uuid, char_uuid"
             )
         }
 
@@ -250,7 +250,7 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
         // Dispatch async read
         Task { @MainActor in
             do {
-                let data = try await bleManager.readCharacteristic(address: deviceUUID, serviceUUID: serviceUUID, charUUID: charUUID)
+                let data = try await bleManager.readCharacteristic(address: deviceAddress, serviceUUID: serviceUUID, charUUID: charUUID)
                 writeResponse(Response.success(id: readRequestId, result: ["value": AnyCodable(Array(data).map { Int($0) })]))
             } catch let error as LinuxBLEError {
                 let (code, message) = mapLinuxBLEError(error)
@@ -263,14 +263,14 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
 
     case "write_characteristic":
         // Extract required parameters
-        guard let deviceUUID = request.params?["device_uuid"]?.value as? String,
+        guard let deviceAddress = request.params?["device_address"]?.value as? String,
               let serviceUUID = request.params?["service_uuid"]?.value as? String,
               let charUUID = request.params?["char_uuid"]?.value as? String,
               let valueArray = request.params?["value"]?.value as? [Int] else {
             return Response.error(
                 id: request.id,
                 code: ErrorCode.invalidParams,
-                message: "Missing required params: device_uuid, service_uuid, char_uuid, value"
+                message: "Missing required params: device_address, service_uuid, char_uuid, value"
             )
         }
 
@@ -283,7 +283,7 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
         // Dispatch async write
         Task { @MainActor in
             do {
-                try await bleManager.writeCharacteristic(address: deviceUUID, serviceUUID: serviceUUID, charUUID: charUUID, data: data, withResponse: withResponse)
+                try await bleManager.writeCharacteristic(address: deviceAddress, serviceUUID: serviceUUID, charUUID: charUUID, data: data, withResponse: withResponse)
                 writeResponse(Response.success(id: writeRequestId, result: ["status": AnyCodable("written")]))
             } catch let error as LinuxBLEError {
                 let (code, message) = mapLinuxBLEError(error)
@@ -296,13 +296,13 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
 
     case "subscribe":
         // Extract required parameters
-        guard let deviceUUID = request.params?["device_uuid"]?.value as? String,
+        guard let deviceAddress = request.params?["device_address"]?.value as? String,
               let serviceUUID = request.params?["service_uuid"]?.value as? String,
               let charUUID = request.params?["char_uuid"]?.value as? String else {
             return Response.error(
                 id: request.id,
                 code: ErrorCode.invalidParams,
-                message: "Missing required params: device_uuid, service_uuid, char_uuid"
+                message: "Missing required params: device_address, service_uuid, char_uuid"
             )
         }
 
@@ -312,7 +312,7 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
         // Dispatch async subscribe
         Task { @MainActor in
             do {
-                try await bleManager.subscribe(address: deviceUUID, serviceUUID: serviceUUID, charUUID: charUUID)
+                try await bleManager.subscribe(address: deviceAddress, serviceUUID: serviceUUID, charUUID: charUUID)
                 writeResponse(Response.success(id: subscribeRequestId, result: ["status": AnyCodable("subscribed")]))
             } catch let error as LinuxBLEError {
                 let (code, message) = mapLinuxBLEError(error)
@@ -325,13 +325,13 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
 
     case "unsubscribe":
         // Extract required parameters
-        guard let deviceUUID = request.params?["device_uuid"]?.value as? String,
+        guard let deviceAddress = request.params?["device_address"]?.value as? String,
               let serviceUUID = request.params?["service_uuid"]?.value as? String,
               let charUUID = request.params?["char_uuid"]?.value as? String else {
             return Response.error(
                 id: request.id,
                 code: ErrorCode.invalidParams,
-                message: "Missing required params: device_uuid, service_uuid, char_uuid"
+                message: "Missing required params: device_address, service_uuid, char_uuid"
             )
         }
 
@@ -340,7 +340,7 @@ func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
 
         // Dispatch on MainActor (unsubscribe is sync but BLEManager is @MainActor)
         Task { @MainActor in
-            bleManager.unsubscribe(address: deviceUUID, serviceUUID: serviceUUID, charUUID: charUUID)
+            bleManager.unsubscribe(address: deviceAddress, serviceUUID: serviceUUID, charUUID: charUUID)
             writeResponse(Response.success(id: unsubscribeRequestId, result: ["status": AnyCodable("unsubscribed")]))
         }
         return nil  // Response written async
