@@ -63,6 +63,9 @@ class BLEManager {
     /// Discovered characteristics cache per device (with service UUID association)
     private var discoveredCharacteristics: [BluetoothAddress: [CachedCharacteristic]] = [:]
 
+    /// Active notification tasks, keyed by "address:charHandle"
+    private var notificationTasks: [String: Task<Void, Never>] = [:]
+
     /// Callback to send events to stdout
     var onEvent: ((Event) -> Void)?
 
@@ -282,6 +285,9 @@ class BLEManager {
 
         // Disconnect from peripheral
         await central.disconnect(connectionState.peripheral)
+
+        // Cancel all subscriptions for this device
+        cancelSubscriptions(for: bluetoothAddress)
 
         // Remove from connections and clear GATT cache
         connections.removeValue(forKey: bluetoothAddress)
@@ -505,7 +511,137 @@ class BLEManager {
         }
     }
 
+    // MARK: - Notification Methods
+
+    /// Subscribe to notifications for a characteristic
+    /// - Parameters:
+    ///   - address: The MAC address string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    /// - Throws: LinuxBLEError if not connected, characteristic not found, or subscribe fails
+    func subscribe(
+        address: String,
+        serviceUUID: String,
+        charUUID: String
+    ) async throws {
+        let normalizedAddress = address.uppercased()
+
+        guard let bluetoothAddress = BluetoothAddress(rawValue: normalizedAddress),
+              connections[bluetoothAddress] != nil else {
+            throw LinuxBLEError.notConnected(normalizedAddress)
+        }
+
+        guard let characteristic = findCharacteristic(
+            address: normalizedAddress,
+            serviceUUID: serviceUUID,
+            charUUID: charUUID
+        ) else {
+            throw LinuxBLEError.characteristicNotFound(charUUID)
+        }
+
+        // Check that characteristic supports notify or indicate
+        guard characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) else {
+            throw LinuxBLEError.operationFailed(
+                NSError(domain: "BLE", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Characteristic does not support notifications"
+                ])
+            )
+        }
+
+        guard let central = central else {
+            throw LinuxBLEError.adapterNotFound
+        }
+
+        // Generate key using address and characteristic handle
+        let key = "\(normalizedAddress):\(characteristic.id)"
+
+        // If already subscribed, return success (idempotent)
+        if notificationTasks[key] != nil {
+            return
+        }
+
+        // Look up service UUID for the event
+        let serviceUUIDStr = serviceUUIDForCharacteristic(address: bluetoothAddress, charHandle: characteristic.id) ?? serviceUUID.uppercased()
+        let charUUIDStr = characteristic.uuid.rawValue.uppercased()
+
+        // Start notification stream
+        let stream = central.notify(for: characteristic)
+
+        // Create task that iterates the AsyncSequence and emits events
+        notificationTasks[key] = Task { @MainActor [weak self] in
+            do {
+                for try await data in stream {
+                    guard let self = self else { break }
+                    let event = Event(
+                        method: "notification",
+                        params: [
+                            "device_uuid": AnyCodable(normalizedAddress),
+                            "service_uuid": AnyCodable(serviceUUIDStr),
+                            "char_uuid": AnyCodable(charUUIDStr),
+                            "value": AnyCodable(Array(data).map { Int($0) })
+                        ]
+                    )
+                    self.onEvent?(event)
+                }
+            } catch {
+                // Stream ended (disconnect or unsubscribe) - expected behavior
+            }
+        }
+    }
+
+    /// Unsubscribe from notifications for a characteristic
+    /// - Parameters:
+    ///   - address: The MAC address string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    func unsubscribe(
+        address: String,
+        serviceUUID: String,
+        charUUID: String
+    ) {
+        let normalizedAddress = address.uppercased()
+
+        guard let _ = BluetoothAddress(rawValue: normalizedAddress),
+              let characteristic = findCharacteristic(
+                  address: normalizedAddress,
+                  serviceUUID: serviceUUID,
+                  charUUID: charUUID
+              ) else {
+            return
+        }
+
+        // Generate key using address and characteristic handle
+        let key = "\(normalizedAddress):\(characteristic.id)"
+
+        // Cancel the notification task
+        notificationTasks[key]?.cancel()
+        notificationTasks.removeValue(forKey: key)
+    }
+
     // MARK: - Private Methods
+
+    /// Cancel all notification subscriptions for a device
+    /// Called during disconnect to clean up notification tasks
+    /// - Parameter address: The device's BluetoothAddress
+    private func cancelSubscriptions(for address: BluetoothAddress) {
+        let prefix = "\(address.rawValue.uppercased()):"
+        for (key, task) in notificationTasks where key.hasPrefix(prefix) {
+            task.cancel()
+            notificationTasks.removeValue(forKey: key)
+        }
+    }
+
+    /// Look up the service UUID for a characteristic by its handle
+    /// - Parameters:
+    ///   - address: The device's BluetoothAddress
+    ///   - charHandle: The characteristic handle (UInt16)
+    /// - Returns: The service UUID string if found, nil otherwise
+    private func serviceUUIDForCharacteristic(address: BluetoothAddress, charHandle: UInt16) -> String? {
+        guard let cachedChars = discoveredCharacteristics[address] else {
+            return nil
+        }
+        return cachedChars.first { $0.characteristic.id == charHandle }?.serviceUUID
+    }
 
     /// Normalize a UUID, converting 4-character short UUIDs to full 128-bit format
     /// - Parameter uuid: The UUID string (either 4-char short or full 128-bit)
@@ -554,7 +690,8 @@ class BLEManager {
             let stillConnected = peripherals[peripheral] ?? false
 
             if !stillConnected {
-                // Unexpected disconnect detected - clear connection and GATT cache
+                // Unexpected disconnect detected - cancel subscriptions and clear state
+                cancelSubscriptions(for: address)
                 connections.removeValue(forKey: address)
                 discoveredServices.removeValue(forKey: address)
                 discoveredCharacteristics.removeValue(forKey: address)
