@@ -15,6 +15,22 @@ enum LinuxErrorCode {
     static let daemonConflict = -101       // BlueZ daemon is running
 }
 
+// MARK: - BLE Error Codes
+/// Application-specific error codes for BLE operations (outside JSON-RPC reserved range)
+/// These codes mirror the macOS backend for cross-platform parity
+enum BLEErrorCode {
+    static let notPoweredOn = -1
+    static let notConnected = -2
+    static let timeout = -3
+    static let invalidUUID = -4
+    static let operationFailed = -5
+    static let deviceNotFound = -6
+    static let connectionFailed = -7
+    static let serviceDiscoveryFailed = -8
+    static let characteristicNotFound = -9
+    static let adapterNotFound = -10  // Linux-specific: no Bluetooth adapter found
+}
+
 // MARK: - Request (Ruby -> Swift)
 struct Request: Codable {
     let id: Int
