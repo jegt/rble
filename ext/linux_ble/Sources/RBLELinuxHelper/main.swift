@@ -133,6 +133,12 @@ func main() {
     // This ensures errors are reported immediately on startup
     validatePrerequisites()
 
+    // Create BLE manager and wire event callback
+    let bleManager = BLEManager()
+    bleManager.onEvent = { event in
+        writeEvent(event)
+    }
+
     let decoder = JSONDecoder()
 
     // Read stdin on a background queue so the main RunLoop can process async callbacks
