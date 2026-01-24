@@ -76,6 +76,12 @@ func mapLinuxBLEError(_ error: LinuxBLEError) -> (code: Int, message: String) {
         return (BLEErrorCode.operationFailed, "Already connecting to: \(address)")
     case .notConnected(let address):
         return (BLEErrorCode.notConnected, "Not connected to: \(address)")
+    case .serviceDiscoveryFailed(let underlying):
+        return (BLEErrorCode.serviceDiscoveryFailed, "Service discovery failed: \(underlying)")
+    case .characteristicNotFound(let uuid):
+        return (BLEErrorCode.characteristicNotFound, "Characteristic not found: \(uuid)")
+    case .operationFailed(let underlying):
+        return (BLEErrorCode.operationFailed, "Operation failed: \(underlying)")
     }
 }
 

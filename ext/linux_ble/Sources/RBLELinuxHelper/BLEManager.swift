@@ -11,6 +11,18 @@ import GATT
 /// Must fully qualify BluetoothLinux.L2CAPSocket to avoid conflict with Bluetooth.L2CAPSocket protocol
 typealias LinuxCentral = GATTCentral<HostController, BluetoothLinux.L2CAPSocket.Connection>
 
+/// GATT Service type for Linux backend
+typealias LinuxService = GATT.Service<LinuxCentral.Peripheral, UInt16>
+
+/// GATT Characteristic type for Linux backend
+typealias LinuxCharacteristic = GATT.Characteristic<LinuxCentral.Peripheral, UInt16>
+
+/// Wrapper to associate a characteristic with its parent service UUID
+struct CachedCharacteristic {
+    let characteristic: LinuxCharacteristic
+    let serviceUUID: String
+}
+
 // MARK: - Connection State
 
 /// Tracks an active connection and its monitoring task
@@ -44,6 +56,12 @@ class BLEManager {
 
     /// Track connection attempts in progress (address -> timeout workItem)
     private var connectingAddresses: [BluetoothAddress: DispatchWorkItem] = [:]
+
+    /// Discovered services cache per device
+    private var discoveredServices: [BluetoothAddress: [LinuxService]] = [:]
+
+    /// Discovered characteristics cache per device (with service UUID association)
+    private var discoveredCharacteristics: [BluetoothAddress: [CachedCharacteristic]] = [:]
 
     /// Callback to send events to stdout
     var onEvent: ((Event) -> Void)?
@@ -265,14 +283,144 @@ class BLEManager {
         // Disconnect from peripheral
         await central.disconnect(connectionState.peripheral)
 
-        // Remove from connections
+        // Remove from connections and clear GATT cache
         connections.removeValue(forKey: bluetoothAddress)
+        discoveredServices.removeValue(forKey: bluetoothAddress)
+        discoveredCharacteristics.removeValue(forKey: bluetoothAddress)
 
         // Emit disconnected event with user_requested reason
         emitDisconnectEvent(address: normalizedAddress, reason: "user_requested", error: nil)
     }
 
+    // MARK: - GATT Discovery Methods
+
+    /// Discover services and characteristics for a connected device
+    /// - Parameter address: The MAC address string
+    /// - Throws: LinuxBLEError if not connected or discovery fails
+    func discoverServices(address: String) async throws {
+        let normalizedAddress = address.uppercased()
+
+        guard let bluetoothAddress = BluetoothAddress(rawValue: normalizedAddress) else {
+            throw LinuxBLEError.notConnected(normalizedAddress)
+        }
+
+        guard let connectionState = connections[bluetoothAddress] else {
+            throw LinuxBLEError.notConnected(normalizedAddress)
+        }
+
+        guard let central = central else {
+            throw LinuxBLEError.adapterNotFound
+        }
+
+        do {
+            // Discover all services
+            let services = try await central.discoverServices(for: connectionState.peripheral)
+            discoveredServices[bluetoothAddress] = services
+
+            // Discover characteristics for each service, tracking service UUID association
+            var allCharacteristics: [CachedCharacteristic] = []
+            for service in services {
+                let serviceUUID = service.uuid.rawValue.uppercased()
+                let characteristics = try await central.discoverCharacteristics(for: service)
+                for char in characteristics {
+                    allCharacteristics.append(CachedCharacteristic(
+                        characteristic: char,
+                        serviceUUID: serviceUUID
+                    ))
+                }
+            }
+            discoveredCharacteristics[bluetoothAddress] = allCharacteristics
+
+        } catch {
+            throw LinuxBLEError.serviceDiscoveryFailed(error)
+        }
+    }
+
+    /// Get discovered services for a connected device in macOS-compatible format
+    /// - Parameter address: The MAC address string
+    /// - Returns: Array of service dictionaries with nested characteristics, or nil if not discovered
+    func getServices(address: String) -> [[String: Any]]? {
+        let normalizedAddress = address.uppercased()
+
+        guard let bluetoothAddress = BluetoothAddress(rawValue: normalizedAddress),
+              let services = discoveredServices[bluetoothAddress],
+              let cachedChars = discoveredCharacteristics[bluetoothAddress] else {
+            return nil
+        }
+
+        return services.map { service in
+            let serviceUUID = service.uuid.rawValue.uppercased()
+
+            // Find characteristics belonging to this service using cached service UUID
+            let serviceCharacteristics = cachedChars.filter { cached in
+                cached.serviceUUID == serviceUUID
+            }
+
+            let charDicts: [[String: Any]] = serviceCharacteristics.map { cached in
+                [
+                    "uuid": cached.characteristic.uuid.rawValue.uppercased(),
+                    "properties": characteristicPropertiesToFlags(cached.characteristic.properties),
+                    "service_uuid": serviceUUID
+                ]
+            }
+
+            return [
+                "uuid": serviceUUID,
+                "primary": service.isPrimary,
+                "characteristics": charDicts
+            ] as [String: Any]
+        }
+    }
+
+    /// Find a characteristic by service and characteristic UUIDs
+    /// - Parameters:
+    ///   - address: The MAC address string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    /// - Returns: The characteristic if found, nil otherwise
+    func findCharacteristic(address: String, serviceUUID: String, charUUID: String) -> LinuxCharacteristic? {
+        let normalizedAddress = address.uppercased()
+
+        guard let bluetoothAddress = BluetoothAddress(rawValue: normalizedAddress),
+              let cachedChars = discoveredCharacteristics[bluetoothAddress] else {
+            return nil
+        }
+
+        let normalizedServiceUUID = normalizeUUID(serviceUUID)
+        let normalizedCharUUID = normalizeUUID(charUUID)
+
+        return cachedChars.first { cached in
+            normalizeUUID(cached.serviceUUID) == normalizedServiceUUID &&
+            normalizeUUID(cached.characteristic.uuid.rawValue) == normalizedCharUUID
+        }?.characteristic
+    }
+
     // MARK: - Private Methods
+
+    /// Normalize a UUID, converting 4-character short UUIDs to full 128-bit format
+    /// - Parameter uuid: The UUID string (either 4-char short or full 128-bit)
+    /// - Returns: The full 128-bit UUID string in uppercase
+    private func normalizeUUID(_ uuid: String) -> String {
+        if uuid.count == 4 {
+            return "0000\(uuid.uppercased())-0000-1000-8000-00805F9B34FB"
+        }
+        return uuid.uppercased()
+    }
+
+    /// Convert GATTCharacteristicProperties to array of string flags
+    /// Matches macOS format exactly for API parity
+    private func characteristicPropertiesToFlags(_ properties: GATTCharacteristicProperties) -> [String] {
+        var flags: [String] = []
+        if properties.contains(.read) { flags.append("read") }
+        if properties.contains(.write) { flags.append("write") }
+        if properties.contains(.writeWithoutResponse) { flags.append("write-without-response") }
+        if properties.contains(.notify) { flags.append("notify") }
+        if properties.contains(.indicate) { flags.append("indicate") }
+        if properties.contains(.broadcast) { flags.append("broadcast") }
+        if properties.contains(.signedWrite) { flags.append("authenticated-signed-writes") }
+        if properties.contains(.extendedProperties) { flags.append("extended-properties") }
+        return flags
+    }
 
     /// Monitor a connection for unexpected disconnect
     /// This runs in a Task and detects when the connection drops
@@ -296,8 +444,10 @@ class BLEManager {
             let stillConnected = peripherals[peripheral] ?? false
 
             if !stillConnected {
-                // Unexpected disconnect detected
+                // Unexpected disconnect detected - clear connection and GATT cache
                 connections.removeValue(forKey: address)
+                discoveredServices.removeValue(forKey: address)
+                discoveredCharacteristics.removeValue(forKey: address)
 
                 let reason = connectionState.intentionalDisconnect ? "user_requested" : "link_loss"
                 emitDisconnectEvent(address: address.rawValue.uppercased(), reason: reason, error: nil)
@@ -384,11 +534,14 @@ enum LinuxBLEError: Error {
     case adapterNotFound
     case notPoweredOn
     case scanningFailed(Error)
-    case deviceNotFound(String)      // Device address not in scan cache
-    case connectionFailed(Error)     // GATTCentral.connect failed
-    case connectionTimeout           // Connection attempt timed out
-    case alreadyConnecting(String)   // Connection already in progress for this address
-    case notConnected(String)        // Disconnect called but not connected
+    case deviceNotFound(String)           // Device address not in scan cache
+    case connectionFailed(Error)          // GATTCentral.connect failed
+    case connectionTimeout                // Connection attempt timed out
+    case alreadyConnecting(String)        // Connection already in progress for this address
+    case notConnected(String)             // Disconnect called but not connected
+    case serviceDiscoveryFailed(Error)    // Service/characteristic discovery failed
+    case characteristicNotFound(String)   // Characteristic UUID not in cache
+    case operationFailed(Error)           // GATT read/write operation failed
 
     var localizedDescription: String {
         switch self {
@@ -408,6 +561,12 @@ enum LinuxBLEError: Error {
             return "Already connecting to: \(address)"
         case .notConnected(let address):
             return "Not connected to: \(address)"
+        case .serviceDiscoveryFailed(let error):
+            return "Service discovery failed: \(error)"
+        case .characteristicNotFound(let uuid):
+            return "Characteristic not found: \(uuid)"
+        case .operationFailed(let error):
+            return "Operation failed: \(error)"
         }
     }
 }
