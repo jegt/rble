@@ -125,13 +125,13 @@ module RBLE
         params = { allow_duplicates: allow_duplicates }
         params[:service_uuids] = service_uuids if service_uuids
 
-        send_request('scan_start', params)
+        send_request('start_scan', params)
       end
 
       def stop_scan
         @state_mutex.synchronize { return unless @scanning }
 
-        send_request('scan_stop')
+        send_request('stop_scan')
         @state_mutex.synchronize do
           @scanning = false
           @scan_callback = nil
