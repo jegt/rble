@@ -55,12 +55,26 @@ func createParseErrorResponse() -> Response {
     )
 }
 
+// MARK: - Error Mapping
+
+/// Map LinuxBLEError to JSON-RPC error code and message
+func mapLinuxBLEError(_ error: LinuxBLEError) -> (code: Int, message: String) {
+    switch error {
+    case .adapterNotFound:
+        return (BLEErrorCode.adapterNotFound, "No Bluetooth adapter found. Ensure a Bluetooth adapter is connected.")
+    case .notPoweredOn:
+        return (BLEErrorCode.notPoweredOn, "Bluetooth adapter is not powered on")
+    case .scanningFailed(let underlying):
+        return (BLEErrorCode.operationFailed, "Scanning failed: \(underlying)")
+    }
+}
+
 // MARK: - Request Handlers
 
 /// Handle a parsed request and return a response
 /// For sync methods, returns a Response directly
 /// For async methods, returns nil and calls writeResponse when complete
-func handleRequest(_ request: Request) -> Response? {
+func handleRequest(_ request: Request, bleManager: BLEManager) -> Response? {
     switch request.method {
     case "ping":
         // Simple ping/pong for testing the protocol
@@ -68,9 +82,44 @@ func handleRequest(_ request: Request) -> Response? {
             id: request.id,
             result: ["pong": AnyCodable(true)]
         )
+
+    case "start_scan":
+        // Extract parameters
+        let serviceUUIDs = (request.params?["service_uuids"]?.value as? [Any])?.compactMap { $0 as? String }
+        let allowDuplicates = (request.params?["allow_duplicates"]?.value as? Bool) ?? false
+        // Extract timeout parameter (in seconds, as Double/TimeInterval)
+        let timeout = request.params?["timeout"]?.value as? Double
+
+        // Dispatch async scan
+        Task {
+            do {
+                try await bleManager.startScan(serviceUUIDs: serviceUUIDs, allowDuplicates: allowDuplicates, timeout: timeout)
+                DispatchQueue.main.async {
+                    writeResponse(Response.success(id: request.id, result: ["scanning": AnyCodable(true)]))
+                }
+            } catch let error as LinuxBLEError {
+                DispatchQueue.main.async {
+                    let (code, message) = mapLinuxBLEError(error)
+                    writeResponse(Response.error(id: request.id, code: code, message: message))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    writeResponse(Response.error(id: request.id, code: BLEErrorCode.operationFailed, message: "Scan failed: \(error)"))
+                }
+            }
+        }
+        return nil  // Response written async
+
+    case "stop_scan":
+        Task {
+            await bleManager.stopScan()
+            DispatchQueue.main.async {
+                writeResponse(Response.success(id: request.id, result: ["stopped": AnyCodable(true)]))
+            }
+        }
+        return nil  // Response written async
+
     default:
-        // All other methods return method_not_found for now
-        // Phase 7+ will add real BLE handlers
         return Response.error(
             id: request.id,
             code: ErrorCode.methodNotFound,
@@ -160,7 +209,7 @@ func main() {
 
                 // Handle request on main queue for thread safety
                 DispatchQueue.main.async {
-                    if let response = handleRequest(request) {
+                    if let response = handleRequest(request, bleManager: bleManager) {
                         // Sync response - write immediately
                         writeResponse(response)
                     }
