@@ -146,4 +146,58 @@ module RBLE
             'Check the Flags property for supported operations.')
     end
   end
+
+  # Base class for backend selection errors
+  class BackendUnavailableError < Error
+    attr_reader :backend
+
+    def initialize(backend:, reason:, suggestion: nil)
+      @backend = backend
+      message = "Backend :#{backend} unavailable: #{reason}"
+      message = "#{message}\n\n#{suggestion}" if suggestion
+      super(message)
+    end
+  end
+
+  # Raised when attempting to change backend after BLE operations have started
+  class BackendAlreadySelectedError < Error
+    def initialize(msg = 'Cannot change backend after BLE operations have started.')
+      super
+    end
+  end
+
+  # Raised when Linux Swift helper binary is not found
+  class HelperNotFoundError < BackendUnavailableError
+    def initialize(path)
+      super(
+        backend: :bluetooth_linux,
+        reason: "Helper binary not found at #{path}",
+        suggestion: <<~SUGGESTION.chomp
+          Build the helper manually:
+            cd ext/linux_ble && swift build -c release
+
+          Or use BlueZ backend instead:
+            RBLE.backend = :bluez
+        SUGGESTION
+      )
+    end
+  end
+
+  # Raised when BlueZ daemon conflicts with direct HCI access
+  class DaemonConflictError < BackendUnavailableError
+    def initialize(adapter = nil)
+      adapter_info = adapter ? " on #{adapter}" : ''
+      super(
+        backend: :bluetooth_linux,
+        reason: "BlueZ Bluetooth daemon is running#{adapter_info}",
+        suggestion: <<~SUGGESTION.chomp
+          Stop the daemon temporarily:
+            sudo systemctl stop bluetooth
+
+          Or use BlueZ backend instead (works with daemon):
+            RBLE.backend = :bluez
+        SUGGESTION
+      )
+    end
+  end
 end
