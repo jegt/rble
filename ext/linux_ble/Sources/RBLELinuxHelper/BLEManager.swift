@@ -395,6 +395,116 @@ class BLEManager {
         }?.characteristic
     }
 
+    // MARK: - GATT Read/Write Methods
+
+    /// Read a characteristic value
+    /// - Parameters:
+    ///   - address: The MAC address string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    /// - Returns: The characteristic value as Data
+    /// - Throws: LinuxBLEError if not connected, characteristic not found, or read fails
+    func readCharacteristic(
+        address: String,
+        serviceUUID: String,
+        charUUID: String
+    ) async throws -> Data {
+        let normalizedAddress = address.uppercased()
+
+        guard let bluetoothAddress = BluetoothAddress(rawValue: normalizedAddress),
+              connections[bluetoothAddress] != nil else {
+            throw LinuxBLEError.notConnected(normalizedAddress)
+        }
+
+        guard let characteristic = findCharacteristic(
+            address: normalizedAddress,
+            serviceUUID: serviceUUID,
+            charUUID: charUUID
+        ) else {
+            throw LinuxBLEError.characteristicNotFound(charUUID)
+        }
+
+        // Check that characteristic supports read
+        guard characteristic.properties.contains(.read) else {
+            throw LinuxBLEError.operationFailed(
+                NSError(domain: "BLE", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Characteristic does not support read"
+                ])
+            )
+        }
+
+        guard let central = central else {
+            throw LinuxBLEError.adapterNotFound
+        }
+
+        do {
+            let data = try await central.readValue(for: characteristic)
+            return data
+        } catch {
+            throw LinuxBLEError.operationFailed(error)
+        }
+    }
+
+    /// Write a value to a characteristic
+    /// - Parameters:
+    ///   - address: The MAC address string
+    ///   - serviceUUID: The service UUID (short or full)
+    ///   - charUUID: The characteristic UUID (short or full)
+    ///   - data: The data to write
+    ///   - withResponse: Whether to request a write response from the peripheral
+    /// - Throws: LinuxBLEError if not connected, characteristic not found, or write fails
+    func writeCharacteristic(
+        address: String,
+        serviceUUID: String,
+        charUUID: String,
+        data: Data,
+        withResponse: Bool
+    ) async throws {
+        let normalizedAddress = address.uppercased()
+
+        guard let bluetoothAddress = BluetoothAddress(rawValue: normalizedAddress),
+              connections[bluetoothAddress] != nil else {
+            throw LinuxBLEError.notConnected(normalizedAddress)
+        }
+
+        guard let characteristic = findCharacteristic(
+            address: normalizedAddress,
+            serviceUUID: serviceUUID,
+            charUUID: charUUID
+        ) else {
+            throw LinuxBLEError.characteristicNotFound(charUUID)
+        }
+
+        // Check that characteristic supports the requested write type
+        if withResponse {
+            guard characteristic.properties.contains(.write) else {
+                throw LinuxBLEError.operationFailed(
+                    NSError(domain: "BLE", code: -1, userInfo: [
+                        NSLocalizedDescriptionKey: "Characteristic does not support write with response"
+                    ])
+                )
+            }
+        } else {
+            guard characteristic.properties.contains(.writeWithoutResponse) else {
+                throw LinuxBLEError.operationFailed(
+                    NSError(domain: "BLE", code: -1, userInfo: [
+                        NSLocalizedDescriptionKey: "Characteristic does not support write without response"
+                    ])
+                )
+            }
+        }
+
+        guard let central = central else {
+            throw LinuxBLEError.adapterNotFound
+        }
+
+        do {
+            try await central.writeValue(data, for: characteristic, withResponse: withResponse)
+        } catch {
+            throw LinuxBLEError.operationFailed(error)
+        }
+    }
+
     // MARK: - Private Methods
 
     /// Normalize a UUID, converting 4-character short UUIDs to full 128-bit format
