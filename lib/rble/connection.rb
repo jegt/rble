@@ -51,6 +51,10 @@ module RBLE
       @state_callbacks = []
       @disconnect_callbacks = []
 
+      # Notification thread infrastructure
+      @notification_thread = nil
+      @notification_mutex = Mutex.new
+
       # Create owned D-Bus session for BlueZ backend
       # Each Connection gets its own D-Bus connection + event loop to avoid
       # state corruption issues when shared connections are used
@@ -210,18 +214,83 @@ module RBLE
       end
     end
 
+    # Ensure notification processing is running
+    # Called by backend when first subscription is registered
+    # Starts background thread for BlueZ backend
+    # @return [void]
+    def ensure_notification_processing
+      return unless bluez_backend?
+
+      start_notification_thread
+    end
+
     private
 
     # Handle events from the Connection's event loop
+    # Notifications are dispatched by background thread when running
+    # This method is used for manual process_events calls
     # @param event [Event] Event to handle
     def handle_connection_event(event)
       case event.type
       when :notification
-        # Notification events contain callback and value
-        data = event.data
-        if data.is_a?(Hash) && data[:callback]
-          data[:callback].call(data[:value])
+        # Background thread dispatches notifications automatically
+        # Only dispatch here if no background thread (manual process_events)
+        unless @notification_thread&.alive?
+          data = event.data
+          data[:callback]&.call(data[:value]) if data.is_a?(Hash)
         end
+      end
+    end
+
+    # Start background thread for notification processing
+    # Thread starts on first subscribe and runs until disconnect
+    # @return [void]
+    def start_notification_thread
+      @notification_mutex.synchronize do
+        return if @notification_thread&.alive?
+        return unless @dbus_session
+
+        @notification_thread = Thread.new do
+          Thread.current.name = 'rble-notify'
+          notification_loop
+        end
+      end
+    end
+
+    # Main notification processing loop
+    # Runs until disconnect, dispatching callbacks with exception handling
+    # @return [void]
+    def notification_loop
+      RBLE.logger&.debug('[RBLE] Notification thread started')
+      while connected? && @dbus_session
+        begin
+          @dbus_session.process_events(timeout: 0.1) do |event|
+            dispatch_notification_safely(event) if event.type == :notification
+          end
+        rescue StandardError => e
+          # Log at debug level and continue - don't let errors kill the thread
+          RBLE.logger&.debug("[RBLE] Notification thread error: #{e.class}: #{e.message}")
+        end
+      end
+      RBLE.logger&.debug('[RBLE] Notification thread stopped')
+    end
+
+    # Dispatch notification callback with exception protection
+    # User callback exceptions are logged but don't kill the thread
+    # @param event [Event] Notification event to dispatch
+    # @return [void]
+    def dispatch_notification_safely(event)
+      return unless connected?
+
+      data = event.data
+      return unless data.is_a?(Hash) && data[:callback]
+
+      RBLE.logger&.debug('[RBLE] Dispatching notification callback')
+      begin
+        data[:callback].call(data[:value])
+      rescue StandardError => e
+        RBLE.logger&.debug("[RBLE] Callback raised: #{e.class}: #{e.message}")
+        # Continue processing - don't let buggy callbacks break notification delivery
       end
     end
 
@@ -281,10 +350,21 @@ module RBLE
     end
 
     # Destroy D-Bus session
-    # Stops event loop and closes connection
+    # Stops notification thread first, then event loop and closes connection
     # @return [void]
     def destroy_dbus_session
       return unless @dbus_session
+
+      # Stop notification thread first
+      @notification_mutex.synchronize do
+        if @notification_thread&.alive?
+          # Thread will exit naturally when it sees we're disconnected
+          # Give it a short timeout to exit gracefully
+          @notification_thread.join(1)
+          @notification_thread.kill if @notification_thread.alive?
+        end
+        @notification_thread = nil
+      end
 
       begin
         @dbus_session.disconnect

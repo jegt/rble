@@ -395,8 +395,12 @@ module RBLE
 
         wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
 
+        RBLE.logger&.debug("[RBLE] Subscribing to #{char_path}")
+
         # Start notifications - BlueZ handles CCCD automatically
         wrapper.start_notify
+
+        RBLE.logger&.debug("[RBLE] StartNotify called for #{char_path}")
 
         # Subscribe to PropertiesChanged signal for value updates
         # Events are enqueued to the Connection's event loop
@@ -406,6 +410,9 @@ module RBLE
 
           # Convert value bytes to binary string
           value = changed['Value'].map(&:to_i).pack('C*')
+
+          RBLE.logger&.debug("[RBLE] Notification received: #{char_path} (#{value.bytesize} bytes)")
+          RBLE.logger&.debug("[RBLE]   Data: #{value.bytes.map { |b| format('%02x', b) }.join(' ')}")
 
           # Enqueue to Connection's event loop for thread-safe callback dispatch
           # Using Connection's dbus_session ensures notifications are delivered
@@ -423,6 +430,10 @@ module RBLE
             uuid: wrapper.uuid
           }
         end
+
+        # Start background notification processing on first subscribe
+        connection.ensure_notification_processing
+
         true
       rescue DBus::Error => e
         # Check if disconnect related - handle unexpected disconnect
@@ -450,6 +461,8 @@ module RBLE
       # @return [Boolean] true on success
       # @raise [NotConnectedError] if device is not connected
       def unsubscribe_characteristic(char_path)
+        RBLE.logger&.debug("[RBLE] Unsubscribing from #{char_path}")
+
         device_path = extract_device_path(char_path)
         subscription, connected = @state_mutex.synchronize do
           sub = @subscriptions.delete(char_path)
@@ -463,6 +476,7 @@ module RBLE
 
         begin
           subscription[:wrapper].stop_notify
+          RBLE.logger&.debug("[RBLE] StopNotify called for #{char_path}")
         rescue DBus::Error => e
           # Check if disconnect related - handle unexpected disconnect
           if e.name == 'org.bluez.Error.NotConnected'
