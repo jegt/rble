@@ -8,6 +8,14 @@ require_relative '../errors'
 module RBLE
   module Backend
     # BluetoothLinux backend for Linux BLE operations via subprocess
+    #
+    # EXPERIMENTAL: This backend is currently non-functional due to bugs in the
+    # upstream BluetoothLinux library (L2CAP connection timeout). Scanning works,
+    # but connections fail. Use the BlueZ backend instead.
+    #
+    # See: ext/linux_ble/HANDOFF.md for details on the blocking issues.
+    #
+    # This code is preserved for potential future use if upstream fixes the issues.
     class BluetoothLinux < Base
       HELPER_PATH = File.expand_path('../../../ext/linux_ble/.build/release/RBLELinuxHelper', __dir__)
 
@@ -56,11 +64,64 @@ module RBLE
 
         @stdin, @stdout, @stderr, @wait_thread = Open3.popen3(HELPER_PATH)
 
+        # Check for immediate startup errors (daemon conflict, missing permissions)
+        # The helper validates prerequisites and exits with an error if they fail
+        check_startup_error
+
         # Start reader thread for async events
         start_reader_thread
 
         # Start background event processor
         start_event_processor
+      end
+
+      # Check if the subprocess exited immediately with a startup error
+      def check_startup_error
+        # Give the helper a moment to perform validation and potentially exit
+        sleep 0.1
+
+        # If the process is still alive, startup succeeded
+        return if @wait_thread.alive?
+
+        # Process died - read any error output
+        begin
+          # Try to read the error response (JSON with id: 0)
+          line = @stdout.gets
+          if line
+            response = JSON.parse(line, symbolize_names: true)
+            if response[:error]
+              message = response[:error][:message] || response[:error]['message']
+              raise_startup_error(message)
+            end
+          end
+        rescue JSON::ParserError
+          # Not JSON, check stderr
+        end
+
+        # Check stderr for any error messages
+        stderr_output = @stderr.read_nonblock(4096) rescue nil
+        if stderr_output && !stderr_output.empty?
+          raise SubprocessError, "Helper startup failed: #{stderr_output.strip}"
+        end
+
+        # Generic failure
+        raise SubprocessError, 'Helper process exited unexpectedly during startup'
+      end
+
+      # Raise appropriate error based on startup error message
+      def raise_startup_error(message)
+        case message
+        when /BlueZ.*daemon.*running|bluetooth\.service/i
+          raise DaemonConflictError
+        when /CAP_NET_RAW|capabilities|permission/i
+          raise CapabilityError, HELPER_PATH
+        when /adapter.*not found|no.*bluetooth/i
+          raise AdapterNotFoundError
+        when /not powered/i
+          raise BluetoothOffError
+        else
+          raise SubprocessError, "Helper startup failed: #{message}"
+        end
       end
 
       # Send request and wait for response
@@ -495,10 +556,10 @@ module RBLE
         case message
         when /not powered on/i
           raise BluetoothOffError
+        when /network is down/i
+          raise AdapterDownError
         when /permission denied|cap_net_raw/i
-          raise PermissionError, 'access Bluetooth on Linux. ' \
-            "Ensure the process has CAP_NET_RAW capability:\n" \
-            '  sudo setcap cap_net_raw+eip /path/to/ruby'
+          raise CapabilityError, HELPER_PATH
         when /daemon.*conflict|bluetoothd/i
           raise DaemonConflictError
         else
