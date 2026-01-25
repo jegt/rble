@@ -572,9 +572,11 @@ module RBLE
         connection.handle_disconnect(:link_loss)
       end
 
-      # Translate D-Bus errors to human-readable messages
+      # Translate D-Bus errors to human-readable messages with error code
+      # @param error [DBus::Error] The D-Bus error
+      # @return [String] Human-readable message with error code
       def translate_dbus_error(error)
-        case error.name
+        description = case error.name
         when 'org.bluez.Error.Failed'
           'Operation failed'
         when 'org.bluez.Error.InProgress'
@@ -584,14 +586,23 @@ module RBLE
         when 'org.bluez.Error.NotPermitted'
           'Operation not permitted'
         when 'org.bluez.Error.NotAuthorized'
-          'Not authorized (may need pairing)'
+          'Authorization required'
         when 'org.bluez.Error.NotSupported'
-          'Operation not supported by this characteristic'
+          'Operation not supported'
         when 'org.bluez.Error.InvalidValueLength'
-          'Invalid data length for characteristic'
+          'Invalid data length'
+        when 'org.bluez.Error.InvalidOffset'
+          'Invalid offset'
+        when 'org.bluez.Error.NotReady'
+          'Device not ready'
+        when 'org.bluez.Error.AuthenticationFailed'
+          'Authentication failed'
         else
           error.message
         end
+
+        # Include error code for debugging
+        "#{description} (#{error.name})"
       end
 
       # Setup adapter for scanning using the given session
