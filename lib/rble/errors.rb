@@ -64,6 +64,23 @@ module RBLE
     end
   end
 
+  # Raised when device is no longer available (disappeared between scan and connect)
+  class DeviceNotFoundError < ConnectionError
+    attr_reader :address, :device_name
+
+    def initialize(address, device_name: nil)
+      @address = address
+      @device_name = device_name
+
+      msg = if device_name
+              "Device '#{device_name}' (#{address}) was seen during scan but is no longer available"
+            else
+              "Device #{address} was seen during scan but is no longer available"
+            end
+      super(msg)
+    end
+  end
+
   # Raised when operation requires an active connection
   class NotConnectedError < ConnectionError
     def initialize(msg = nil)
