@@ -7,9 +7,9 @@ module RBLE
     # BlueZ D-Bus backend for Linux BLE operations
     class BlueZ < Base
       def initialize
-        @connection = nil
-        @adapter = nil
-        @event_loop = nil
+        # Scan session (temporary D-Bus session for scanning only)
+        @scan_session = nil
+        @scan_adapter_path = nil # Store adapter path for filtering
         @scanning = false
         @scan_callback = nil
         @known_devices = {} # path => Device
@@ -21,14 +21,10 @@ module RBLE
         @device_services = {}    # device_path => [Service, ...]
 
         # Subscription tracking for notifications
-        @subscriptions = {} # char_path => { callback:, wrapper: }
+        @subscriptions = {} # char_path => { callback:, wrapper:, connection: }
 
         # Connection object tracking for disconnect notifications
         @connection_objects = {} # device_path => Connection instance
-
-        # Monitoring infrastructure for disconnect detection
-        @monitoring_loop = nil
-        @monitoring_mutex = Mutex.new
 
         # Thread safety: protects shared state accessed from multiple threads
         # (D-Bus signal handlers run on rble-dbus-loop thread, user code on main thread)
@@ -52,18 +48,23 @@ module RBLE
         @state_mutex.synchronize { @known_devices.clear }
 
         begin
-          setup_connection
-          setup_adapter(adapter)
-          setup_signal_handlers
-          start_discovery(service_uuids: service_uuids, allow_duplicates: allow_duplicates)
+          # Create temporary D-Bus session for scanning
+          # This session will be destroyed when scan stops
+          @scan_session = RBLE::BlueZ::DBusSession.new
+          @scan_session.connect
+
+          # Setup adapter and signal handlers
+          @scan_adapter_path = setup_adapter_for_scan(@scan_session, adapter)
+          setup_scan_signal_handlers(@scan_session)
+          start_discovery_on_session(@scan_session, service_uuids: service_uuids, allow_duplicates: allow_duplicates)
 
           # Process existing devices (already discovered before scan started)
-          process_existing_devices
+          process_existing_devices_from_session(@scan_session)
 
-          # Start event processing
-          @event_loop.start(@connection.bus)
+          # Start event processing on the scan session
+          @scan_session.start_event_loop
         rescue StandardError
-          cleanup
+          stop_scan_cleanup
           raise
         end
       end
@@ -73,12 +74,16 @@ module RBLE
         @state_mutex.synchronize { return unless @scanning }
 
         begin
-          @adapter&.stop_discovery
+          # Stop discovery on the scan session's adapter
+          if @scan_session && @scan_adapter_path
+            adapter = RBLE::BlueZ::Adapter.new_from_session(@scan_session, @scan_adapter_path)
+            adapter.stop_discovery
+          end
         rescue StandardError
           # Ignore errors during cleanup
         end
 
-        # Only clean up scan-specific state, preserve D-Bus connection for subsequent operations
+        # Destroy the temporary scan session - this connection is never reused
         stop_scan_cleanup
       end
 
@@ -117,13 +122,15 @@ module RBLE
       # @return [Boolean] true if shutdown, false if timeout
       def process_events(timeout: nil)
         return false unless @scanning
+        return false unless @scan_session
 
-        @event_loop.process_events(timeout: timeout) do |event|
+        @scan_session.process_events(timeout: timeout) do |event|
           handle_event(event)
         end
       end
 
       # Connect to a BLE device
+      # Uses a temporary D-Bus connection for the connect operation
       # @param device_path [String] D-Bus device path
       # @param timeout [Numeric] Connection timeout in seconds (default: 30)
       # @return [Boolean] true on successful connection
@@ -136,13 +143,15 @@ module RBLE
           raise AlreadyConnectedError if @connected_devices.key?(device_path)
         end
 
-        # Create BlueZ::Device wrapper
-        conn = ensure_connection
+        # Create temporary D-Bus connection for the connect operation
+        # This connection will be closed after connect completes
+        conn = create_temporary_connection
         device = RBLE::BlueZ::Device.new(conn, device_path)
 
         # Check if already connected at BlueZ level
         if device.connected?
           @state_mutex.synchronize { @connected_devices[device_path] = device }
+          conn.disconnect # Clean up temporary connection
           return true
         end
 
@@ -167,8 +176,9 @@ module RBLE
           cleanup_connection_event_loop(event_loop)
           raise ConnectionError, "Failed to connect: #{e.message}"
         ensure
-          # Stop the event loop if still running
+          # Stop the event loop and close temporary connection
           cleanup_connection_event_loop(event_loop)
+          conn&.disconnect
         end
       end
 
@@ -249,11 +259,12 @@ module RBLE
       end
 
       # Get the device D-Bus path for a given MAC address
+      # Uses a temporary D-Bus connection for the lookup
       # @param address [String] Device MAC address (e.g., "AA:BB:CC:DD:EE:FF")
       # @param adapter [String, nil] Specific adapter name (e.g., "hci0")
       # @return [String, nil] Device path or nil if not found
       def device_path_for_address(address, adapter: nil)
-        conn = ensure_connection
+        conn = create_temporary_connection
         om = conn.object_manager
         managed = om.GetManagedObjects.first
 
@@ -277,6 +288,8 @@ module RBLE
         end
 
         nil
+      ensure
+        conn&.disconnect
       end
 
       # Read a characteristic value
@@ -430,11 +443,17 @@ module RBLE
       private
 
       # Setup PropertiesChanged monitoring for disconnect detection
+      # Uses the Connection's own DBusSession for monitoring
       # @param device_path [String] D-Bus device path
       # @param connection [Connection] Connection to notify on disconnect
       def setup_disconnect_monitoring(device_path, connection)
-        conn = ensure_connection
-        device_obj = conn.object(device_path)
+        # Use the Connection's own D-Bus session for monitoring
+        # This ensures the Connection's event loop receives disconnect signals
+        session = connection.dbus_session
+        return unless session # No session = no monitoring (e.g., macOS backend)
+
+        device_obj = session.object(device_path)
+        device_obj.introspect
         props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
         # Subscribe to PropertiesChanged for this device
@@ -450,8 +469,7 @@ module RBLE
           end
         end
 
-        # Start monitoring event loop if not already running
-        start_monitoring_loop(conn)
+        # No separate monitoring loop needed - Connection's event loop handles signals
       end
 
       # Extract device path from characteristic path
@@ -493,25 +511,6 @@ module RBLE
         connection.handle_disconnect(:link_loss)
       end
 
-      # Start the background monitoring event loop for disconnect detection
-      # @param conn [DBusConnection] D-Bus connection
-      def start_monitoring_loop(conn)
-        @monitoring_mutex.synchronize do
-          return if @monitoring_loop&.running?
-
-          @monitoring_loop = RBLE::BlueZ::EventLoop.new
-          @monitoring_loop.start(conn.bus)
-        end
-      end
-
-      # Stop the background monitoring event loop
-      def stop_monitoring_loop
-        @monitoring_mutex.synchronize do
-          @monitoring_loop&.stop
-          @monitoring_loop = nil
-        end
-      end
-
       # Translate D-Bus errors to human-readable messages
       def translate_dbus_error(error)
         case error.name
@@ -534,20 +533,16 @@ module RBLE
         end
       end
 
-      def setup_connection
-        # Reuse existing D-Bus connection if available
-        return if @connection
-
-        @connection = RBLE::BlueZ::DBusConnection.new
-        @connection.connect
-      end
-
-      def setup_adapter(adapter_name)
+      # Setup adapter for scanning using the given session
+      # @param session [DBusSession] D-Bus session to use
+      # @param adapter_name [String, nil] Adapter name (e.g., "hci0")
+      # @return [String] Adapter path
+      def setup_adapter_for_scan(session, adapter_name)
         adapter_path = if adapter_name
                          "/org/bluez/#{adapter_name}"
                        else
                          # Find first available adapter
-                         om = @connection.object_manager
+                         om = session.object_manager
                          managed = om.GetManagedObjects.first
                          adapter_entry = managed.find { |_path, ifaces| ifaces.key?(RBLE::BlueZ::ADAPTER_INTERFACE) }
                          raise AdapterNotFoundError unless adapter_entry
@@ -555,45 +550,52 @@ module RBLE
                          adapter_entry.first
                        end
 
-        @adapter = RBLE::BlueZ::Adapter.new(@connection, adapter_path)
-        raise AdapterDisabledError, @adapter.name unless @adapter.powered?
+        adapter = RBLE::BlueZ::Adapter.new_from_session(session, adapter_path)
+        raise AdapterDisabledError, adapter.name unless adapter.powered?
+
+        adapter_path
       end
 
-      def setup_signal_handlers
-        @event_loop = RBLE::BlueZ::EventLoop.new
-
+      # Setup signal handlers for scanning using the scan session
+      # @param session [DBusSession] D-Bus session to use
+      def setup_scan_signal_handlers(session)
         # Subscribe to InterfacesAdded for new device discovery
-        root = @connection.root_object
+        root = session.object('/')
+        root.introspect
         object_manager = root[RBLE::BlueZ::OBJECT_MANAGER_INTERFACE]
 
         object_manager.on_signal('InterfacesAdded') do |path, interfaces|
-          # Capture @event_loop to prevent race with cleanup setting it to nil
-          event_loop = @event_loop
-          if interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE) && event_loop
-            event_loop.enqueue(:device_found, path, interfaces[RBLE::BlueZ::DEVICE_INTERFACE])
+          # Capture session to prevent race with cleanup setting it to nil
+          scan_session = @scan_session
+          if interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE) && scan_session
+            scan_session.enqueue(:device_found, path, interfaces[RBLE::BlueZ::DEVICE_INTERFACE])
           end
         end
         @signal_handlers << [:interfaces_added, object_manager]
 
         object_manager.on_signal('InterfacesRemoved') do |path, interfaces|
-          # Capture @event_loop to prevent race with cleanup setting it to nil
-          event_loop = @event_loop
-          if interfaces.include?(RBLE::BlueZ::DEVICE_INTERFACE) && event_loop
-            event_loop.enqueue(:device_removed, path, nil)
+          # Capture session to prevent race with cleanup setting it to nil
+          scan_session = @scan_session
+          if interfaces.include?(RBLE::BlueZ::DEVICE_INTERFACE) && scan_session
+            scan_session.enqueue(:device_removed, path, nil)
           end
         end
         @signal_handlers << [:interfaces_removed, object_manager]
       end
 
-      def subscribe_to_device_properties(device_path)
-        device_obj = @connection.object(device_path)
+      # Subscribe to device property changes during scan
+      # @param session [DBusSession] D-Bus session to use
+      # @param device_path [String] Device path to monitor
+      def subscribe_to_device_properties_for_scan(session, device_path)
+        device_obj = session.object(device_path)
+        device_obj.introspect
         props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
         props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
-          # Capture @event_loop to prevent race with cleanup setting it to nil
-          event_loop = @event_loop
-          if interface == RBLE::BlueZ::DEVICE_INTERFACE && event_loop
-            event_loop.enqueue(:properties_changed, device_path, changed)
+          # Capture session to prevent race with cleanup setting it to nil
+          scan_session = @scan_session
+          if interface == RBLE::BlueZ::DEVICE_INTERFACE && scan_session
+            scan_session.enqueue(:properties_changed, device_path, changed)
           end
         end
         @signal_handlers << [:properties_changed, props_iface, device_path]
@@ -601,21 +603,28 @@ module RBLE
         # Device may have disappeared, ignore
       end
 
-      def start_discovery(service_uuids:, allow_duplicates:)
-        @adapter.set_discovery_filter(
+      # Start discovery on the scan session's adapter
+      # @param session [DBusSession] D-Bus session to use
+      # @param service_uuids [Array<String>, nil] Filter by service UUIDs
+      # @param allow_duplicates [Boolean] Callback on every advertisement
+      def start_discovery_on_session(session, service_uuids:, allow_duplicates:)
+        adapter = RBLE::BlueZ::Adapter.new_from_session(session, @scan_adapter_path)
+        adapter.set_discovery_filter(
           service_uuids: service_uuids,
           allow_duplicates: allow_duplicates
         )
-        @adapter.start_discovery
+        adapter.start_discovery
       end
 
-      def process_existing_devices
-        om = @connection.object_manager
+      # Process existing devices from a D-Bus session
+      # @param session [DBusSession] D-Bus session to use
+      def process_existing_devices_from_session(session)
+        om = session.object_manager
         managed = om.GetManagedObjects.first
 
         managed.each do |path, interfaces|
           next unless interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE)
-          next unless path.start_with?(@adapter.path)
+          next unless path.start_with?(@scan_adapter_path)
 
           device_props = interfaces[RBLE::BlueZ::DEVICE_INTERFACE]
           handle_device_found(path, device_props)
@@ -646,7 +655,7 @@ module RBLE
       end
 
       def handle_device_found(path, properties)
-        return unless path.start_with?(@adapter.path)
+        return unless @scan_adapter_path && path.start_with?(@scan_adapter_path)
 
         device = build_device(path, properties)
 
@@ -660,7 +669,7 @@ module RBLE
         # Subscribe to property changes for this device (only if monitoring updates)
         # Skip subscription when not needed - on_signal makes synchronous D-Bus calls
         # that can block/deadlock when called from within the event loop
-        subscribe_to_device_properties(path) if is_new && @allow_duplicates
+        subscribe_to_device_properties_for_scan(@scan_session, path) if is_new && @allow_duplicates && @scan_session
 
         # Callback if new device or allow_duplicates
         return unless is_new || @allow_duplicates
@@ -783,13 +792,16 @@ module RBLE
         @signal_handlers.clear
       end
 
-      # Clean up scan-specific state, including D-Bus connection
-      # The connection must be closed because DBus::Main leaves state that prevents
-      # subsequent synchronous calls (send_sync) from working properly
+      # Clean up scan-specific state by destroying the temporary scan session
+      # After this, the scan D-Bus connection is never reused (fresh session per scan)
       def stop_scan_cleanup
-        # Stop scan event loop
-        @event_loop&.stop
-        @event_loop = nil
+        # Unsubscribe signal handlers before destroying session
+        unsubscribe_signal_handlers
+
+        # Destroy the temporary scan session (stops event loop and closes D-Bus connection)
+        @scan_session&.disconnect
+        @scan_session = nil
+        @scan_adapter_path = nil
 
         # Clear scan-specific state only
         @state_mutex.synchronize do
@@ -797,23 +809,16 @@ module RBLE
           @known_devices.clear
         end
 
-        unsubscribe_signal_handlers
         @scan_callback = nil
-
-        # Close the D-Bus connection - DBus::Main leaves state that breaks send_sync
-        # A fresh connection will be created for subsequent operations
-        @connection&.disconnect
-        @connection = nil
-        @adapter = nil
       end
 
-      # Full cleanup - disconnects D-Bus connection and clears all state
+      # Full cleanup - resets all backend state
       # Called on errors or when backend needs to be completely reset
       def cleanup
-        # Stop all event loops
-        @event_loop&.stop
-        @event_loop = nil
-        stop_monitoring_loop
+        # Stop scan session if active
+        @scan_session&.disconnect
+        @scan_session = nil
+        @scan_adapter_path = nil
 
         # Clear all shared state atomically
         @state_mutex.synchronize do
@@ -826,19 +831,16 @@ module RBLE
         end
 
         unsubscribe_signal_handlers
-        @connection&.disconnect
-        @connection = nil
-        @adapter = nil
         @scan_callback = nil
       end
 
-      # Ensure we have a D-Bus connection (reuse if available)
-      def ensure_connection
-        return @connection if @connection
-
+      # Create a temporary D-Bus connection for one-shot operations
+      # Used for operations that don't have a Connection context (e.g., connect_device, device_path_for_address)
+      # The connection must be disconnected after use
+      # @return [DBusConnection] New D-Bus connection
+      def create_temporary_connection
         conn = RBLE::BlueZ::DBusConnection.new
         conn.connect
-        @connection = conn
         conn
       end
 

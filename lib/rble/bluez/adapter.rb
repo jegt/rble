@@ -17,6 +17,22 @@ module RBLE
         @properties_iface = @object[PROPERTIES_INTERFACE]
       end
 
+      # Create an Adapter from a DBusSession
+      # @param session [DBusSession] Active D-Bus session
+      # @param path [String] D-Bus object path (e.g., "/org/bluez/hci0")
+      # @return [Adapter]
+      def self.new_from_session(session, path)
+        adapter = allocate
+        adapter.instance_variable_set(:@path, path)
+        adapter.instance_variable_set(:@name, path.split('/').last)
+        object = session.object(path)
+        object.introspect
+        adapter.instance_variable_set(:@object, object)
+        adapter.instance_variable_set(:@adapter_iface, object[ADAPTER_INTERFACE])
+        adapter.instance_variable_set(:@properties_iface, object[PROPERTIES_INTERFACE])
+        adapter
+      end
+
       # Get adapter MAC address
       # @return [String]
       def address
