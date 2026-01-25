@@ -32,7 +32,7 @@ module RBLE
       disconnecting: [:disconnected]
     }.freeze
 
-    attr_reader :address, :device_path
+    attr_reader :address, :device_path, :dbus_session
 
     # Create a connection (internal - use RBLE.connect)
     # @param address [String] Device MAC address
@@ -43,12 +43,18 @@ module RBLE
       @device_path = device_path
       @backend = backend
       @services = nil
+      @dbus_session = nil
 
       # State machine infrastructure
       @state = :connecting
       @state_mutex = Mutex.new
       @state_callbacks = []
       @disconnect_callbacks = []
+
+      # Create owned D-Bus session for BlueZ backend
+      # Each Connection gets its own D-Bus connection + event loop to avoid
+      # state corruption issues when shared connections are used
+      setup_dbus_session if bluez_backend?
 
       # Transition to connected (connection already established by RBLE.connect)
       transition_to(:connected)
@@ -148,6 +154,8 @@ module RBLE
         @backend.unregister_connection(@device_path) if @backend.respond_to?(:unregister_connection)
         @backend.disconnect_device(@device_path)
       ensure
+        # Destroy D-Bus session (stops event loop, closes connection)
+        destroy_dbus_session
         transition_to(:disconnected, reason: :user_requested)
         @services = nil
       end
@@ -196,6 +204,43 @@ module RBLE
         "0000#{short_uuid.downcase}-0000-1000-8000-00805f9b34fb"
       else
         short_uuid.downcase
+      end
+    end
+
+    # Check if using BlueZ backend
+    # @return [Boolean]
+    def bluez_backend?
+      @backend.is_a?(Backend::BlueZ)
+    end
+
+    # Setup D-Bus session for BlueZ backend
+    # Creates a new DBusSession, connects, and starts event loop
+    # @return [void]
+    # @raise [Error] if session creation fails
+    def setup_dbus_session
+      @dbus_session = RBLE::BlueZ::DBusSession.new
+      @dbus_session.connect
+      @dbus_session.start_event_loop
+    rescue StandardError => e
+      # Clean up partial session on failure
+      @dbus_session&.disconnect
+      @dbus_session = nil
+      raise Error, "Failed to create D-Bus session: #{e.message}"
+    end
+
+    # Destroy D-Bus session
+    # Stops event loop and closes connection
+    # @return [void]
+    def destroy_dbus_session
+      return unless @dbus_session
+
+      begin
+        @dbus_session.disconnect
+      rescue StandardError => e
+        # Log warning but continue - fire and forget
+        warn "[RBLE] Failed to disconnect D-Bus session: #{e.message}"
+      ensure
+        @dbus_session = nil
       end
     end
 
