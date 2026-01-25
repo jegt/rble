@@ -146,7 +146,8 @@ module RBLE
       raise NotSupportedError, 'read' unless readable?
       raise NotConnectedError unless @connection.connected?
 
-      @backend.read_characteristic(@path, timeout: timeout)
+      # Pass connection so backend can use its D-Bus session
+      @backend.read_characteristic(@path, connection: @connection, timeout: timeout)
     end
 
     # Read the characteristic value as byte array
@@ -175,7 +176,8 @@ module RBLE
       end
       raise NotConnectedError unless @connection.connected?
 
-      @backend.write_characteristic(@path, data, response: response, timeout: timeout)
+      # Pass connection so backend can use its D-Bus session
+      @backend.write_characteristic(@path, data, connection: @connection, response: response, timeout: timeout)
     end
 
     # Subscribe to characteristic notifications/indications
@@ -190,7 +192,8 @@ module RBLE
       raise NotSupportedError, 'notify' unless subscribable?
       raise NotConnectedError unless @connection.connected?
 
-      @backend.subscribe_characteristic(@path, &)
+      # Pass connection so backend can use its D-Bus session for event delivery
+      @backend.subscribe_characteristic(@path, connection: @connection, &)
       @subscribed = true
     end
 

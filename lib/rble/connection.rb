@@ -107,7 +107,8 @@ module RBLE
 
       transition_to(:discovering_services)
       begin
-        raw_services = @backend.discover_services(@device_path, timeout: timeout)
+        # Pass self so backend can use our D-Bus session
+        raw_services = @backend.discover_services(@device_path, connection: self, timeout: timeout)
         @services = build_services_with_active_characteristics(raw_services)
         transition_to(:connected)
         @services
@@ -167,12 +168,53 @@ module RBLE
     def handle_disconnect(reason)
       return false if state == :disconnected
 
+      # Destroy D-Bus session on unexpected disconnect
+      destroy_dbus_session
       transition_to(:disconnected, reason: reason)
       @services = nil
       true
     end
 
+    # Process events from the Connection's event loop
+    # Call this to receive notifications from subscribed characteristics
+    # @param timeout [Numeric, nil] Timeout in seconds (nil = block forever)
+    # @yield [Event] Called for each event (optional - handles notifications automatically)
+    # @return [Boolean] true if shutdown received, false if timeout
+    def process_events(timeout: nil, &block)
+      return false unless @dbus_session
+
+      @dbus_session.process_events(timeout: timeout) do |event|
+        handle_connection_event(event)
+        block&.call(event)
+      end
+    end
+
+    # Drain all pending events without blocking
+    # @yield [Event] Called for each event (optional)
+    # @return [Integer] Number of events processed
+    def drain_events(&block)
+      return 0 unless @dbus_session
+
+      @dbus_session.drain_events do |event|
+        handle_connection_event(event)
+        block&.call(event)
+      end
+    end
+
     private
+
+    # Handle events from the Connection's event loop
+    # @param event [Event] Event to handle
+    def handle_connection_event(event)
+      case event.type
+      when :notification
+        # Notification events contain callback and value
+        data = event.data
+        if data.is_a?(Hash) && data[:callback]
+          data[:callback].call(data[:value])
+        end
+      end
+    end
 
     # Build Service objects with ActiveCharacteristic instances
     # @param raw_services [Array<Hash>] Service data from backend
@@ -210,7 +252,8 @@ module RBLE
     # Check if using BlueZ backend
     # @return [Boolean]
     def bluez_backend?
-      @backend.is_a?(Backend::BlueZ)
+      # Use class name check to avoid requiring BlueZ backend when not needed
+      @backend.class.name == 'RBLE::Backend::BlueZ'
     end
 
     # Setup D-Bus session for BlueZ backend

@@ -3,7 +3,9 @@
 require 'spec_helper'
 
 RSpec.describe RBLE::Connection do
-  let(:mock_backend) { instance_double('RBLE::Backend::Base') }
+  # Use regular double instead of instance_double because backend interface
+  # has been extended with connection: parameter (session-based architecture)
+  let(:mock_backend) { double('RBLE::Backend::Base') }
   let(:device_path) { '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF' }
   let(:address) { 'AA:BB:CC:DD:EE:FF' }
 
@@ -209,7 +211,11 @@ RSpec.describe RBLE::Connection do
     end
 
     it 'clears services cache' do
-      allow(mock_backend).to receive(:discover_services).and_return([])
+      allow(mock_backend).to receive(:discover_services) do |path, **kwargs|
+        expect(path).to eq(device_path)
+        expect(kwargs[:connection]).to eq(connection)
+        []
+      end
       connection.discover_services
       connection.disconnect
 
@@ -237,7 +243,11 @@ RSpec.describe RBLE::Connection do
     end
 
     it 'clears services cache' do
-      allow(mock_backend).to receive(:discover_services).and_return([])
+      allow(mock_backend).to receive(:discover_services) do |path, **kwargs|
+        expect(path).to eq(device_path)
+        expect(kwargs[:connection]).to eq(connection)
+        []
+      end
       connection.discover_services
       connection.handle_disconnect(:link_loss)
 
@@ -272,7 +282,11 @@ RSpec.describe RBLE::Connection do
     end
 
     it 'transitions to :discovering_services and back to :connected' do
-      allow(mock_backend).to receive(:discover_services).and_return([])
+      allow(mock_backend).to receive(:discover_services) do |path, **kwargs|
+        expect(path).to eq(device_path)
+        expect(kwargs[:connection]).to eq(connection)
+        []
+      end
 
       transitions = []
       connection.on_state_change { |old_state, new_state| transitions << [old_state, new_state] }
@@ -285,7 +299,9 @@ RSpec.describe RBLE::Connection do
     end
 
     it 'returns to :connected on discovery failure' do
-      allow(mock_backend).to receive(:discover_services).and_raise(RBLE::ServiceDiscoveryError)
+      allow(mock_backend).to receive(:discover_services) do |_path, **_kwargs|
+        raise RBLE::ServiceDiscoveryError
+      end
 
       expect { connection.discover_services }.to raise_error(RBLE::ServiceDiscoveryError)
       expect(connection.state).to eq(:connected)
