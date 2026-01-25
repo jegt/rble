@@ -18,6 +18,22 @@ module RBLE
         @uuid = get_property('UUID')
       end
 
+      # Create a GattCharacteristic from a DBusSession
+      # @param session [DBusSession] Active D-Bus session
+      # @param char_path [String] D-Bus characteristic path
+      # @return [GattCharacteristic]
+      def self.new_from_session(session, char_path)
+        char = allocate
+        char.instance_variable_set(:@path, char_path)
+        object = session.object(char_path)
+        object.introspect
+        char.instance_variable_set(:@object, object)
+        char.instance_variable_set(:@char_iface, object[GATT_CHARACTERISTIC_INTERFACE])
+        char.instance_variable_set(:@props_iface, object[PROPERTIES_INTERFACE])
+        char.instance_variable_set(:@uuid, char.send(:get_property, 'UUID'))
+        char
+      end
+
       # Get characteristic flags (read, write, notify, etc.)
       def flags
         get_property('Flags')

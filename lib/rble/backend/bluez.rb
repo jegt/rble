@@ -222,12 +222,14 @@ module RBLE
       end
 
       # Discover GATT services on a connected device
+      # Uses the Connection's DBusSession for D-Bus operations
       # @param device_path [String] D-Bus device path
+      # @param connection [Connection] Connection instance
       # @param timeout [Numeric] Discovery timeout in seconds (default: 30)
       # @return [Array<Service>] Discovered services with characteristics
       # @raise [NotConnectedError] if device is not connected
       # @raise [ServiceDiscoveryError] if discovery fails
-      def discover_services(device_path, timeout: 30)
+      def discover_services(device_path, connection:, timeout: 30)
         device, cached_services = @state_mutex.synchronize do
           [@connected_devices[device_path], @device_services[device_path]]
         end
@@ -236,24 +238,22 @@ module RBLE
         # Return cached services if available
         return cached_services if cached_services
 
+        # Use Connection's D-Bus session
+        session = connection.dbus_session
+        raise NotConnectedError, 'No active D-Bus session' unless session
+
         # Check if services already resolved
         unless device.services_resolved?
-          # Setup event loop for waiting on ServicesResolved
-          conn = ensure_connection
-          event_loop = setup_connection_event_loop(conn, device_path)
-
+          # Wait for ServicesResolved using the Connection's event loop
           begin
-            wait_for_property(event_loop, device_path, 'ServicesResolved', true, timeout)
+            wait_for_property_on_session(session, device_path, 'ServicesResolved', true, timeout)
           rescue ConnectionTimeoutError
-            cleanup_connection_event_loop(event_loop)
             raise ServiceDiscoveryError, "Service discovery timed out after #{timeout} seconds"
-          ensure
-            cleanup_connection_event_loop(event_loop)
           end
         end
 
-        # Enumerate services and characteristics
-        services = enumerate_services(device_path)
+        # Enumerate services and characteristics using Connection's session
+        services = enumerate_services_from_session(session, device_path)
         @state_mutex.synchronize { @device_services[device_path] = services }
         services
       end
@@ -293,19 +293,24 @@ module RBLE
       end
 
       # Read a characteristic value
+      # Uses the Connection's DBusSession for D-Bus operations
       # @param char_path [String] D-Bus characteristic path
+      # @param connection [Connection] Connection that owns this characteristic
       # @param timeout [Numeric] Read timeout in seconds (currently unused - D-Bus handles timeout)
       # @return [String] Binary string (ASCII-8BIT encoding)
       # @raise [NotConnectedError] if device is not connected
       # @raise [ReadError] if read fails
-      def read_characteristic(char_path, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
+      def read_characteristic(char_path, connection:, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
         # Check connection before attempting read (thread-safe)
         device_path = extract_device_path(char_path)
         connected = @state_mutex.synchronize { device_path && @connected_devices.key?(device_path) }
         raise NotConnectedError unless connected
 
-        conn = ensure_connection
-        wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
+        # Use Connection's D-Bus session
+        session = connection.dbus_session
+        raise NotConnectedError, 'No active D-Bus session' unless session
+
+        wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
 
         # Read value with empty options
         result = wrapper.read_value({})
@@ -322,21 +327,26 @@ module RBLE
       end
 
       # Write a value to a characteristic
+      # Uses the Connection's DBusSession for D-Bus operations
       # @param char_path [String] D-Bus characteristic path
       # @param data [String, Array<Integer>] Data to write
+      # @param connection [Connection] Connection that owns this characteristic
       # @param response [Boolean] Wait for write response (true = 'request', false = 'command')
       # @param timeout [Numeric] Write timeout in seconds (currently unused - D-Bus handles timeout)
       # @return [Boolean] true on success
       # @raise [NotConnectedError] if device is not connected
       # @raise [WriteError] if write fails
-      def write_characteristic(char_path, data, response: true, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
+      def write_characteristic(char_path, data, connection:, response: true, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
         # Check connection before attempting write (thread-safe)
         device_path = extract_device_path(char_path)
         connected = @state_mutex.synchronize { device_path && @connected_devices.key?(device_path) }
         raise NotConnectedError unless connected
 
-        conn = ensure_connection
-        wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
+        # Use Connection's D-Bus session
+        session = connection.dbus_session
+        raise NotConnectedError, 'No active D-Bus session' unless session
+
+        wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
 
         # Convert string to bytes array if needed
         bytes = data.is_a?(String) ? data.bytes : data
@@ -360,12 +370,14 @@ module RBLE
       end
 
       # Subscribe to characteristic notifications
+      # Uses the Connection's DBusSession for D-Bus operations and event delivery
       # @param char_path [String] D-Bus characteristic path
+      # @param connection [Connection] Connection that owns this characteristic
       # @yield [String] Called with value (binary string) on each notification
       # @return [Boolean] true on success
       # @raise [NotConnectedError] if device is not connected
       # @raise [NotifyError] if subscription fails
-      def subscribe_characteristic(char_path, &callback)
+      def subscribe_characteristic(char_path, connection:, &callback)
         # Check connection and subscription state (thread-safe)
         device_path = extract_device_path(char_path)
         already_subscribed, connected = @state_mutex.synchronize do
@@ -377,13 +389,17 @@ module RBLE
 
         raise NotConnectedError unless connected
 
-        conn = ensure_connection
-        wrapper = RBLE::BlueZ::GattCharacteristic.new(conn, char_path)
+        # Use Connection's D-Bus session for both GATT operations and event delivery
+        session = connection.dbus_session
+        raise NotConnectedError, 'No active D-Bus session' unless session
+
+        wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
 
         # Start notifications - BlueZ handles CCCD automatically
         wrapper.start_notify
 
         # Subscribe to PropertiesChanged signal for value updates
+        # Events are enqueued to the Connection's event loop
         wrapper.on_properties_changed do |interface, changed, _invalidated|
           next unless interface == RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE
           next unless changed.key?('Value')
@@ -391,14 +407,16 @@ module RBLE
           # Convert value bytes to binary string
           value = changed['Value'].map(&:to_i).pack('C*')
 
-          # Enqueue to event loop for thread-safe callback dispatch
-          # Note: We need an active event loop for this to work
-          @event_loop&.enqueue(:notification, char_path, { value: value, callback: callback })
+          # Enqueue to Connection's event loop for thread-safe callback dispatch
+          # Using Connection's dbus_session ensures notifications are delivered
+          # even when scan session is destroyed
+          session.enqueue(:notification, char_path, { value: value, callback: callback })
         end
 
         # Store subscription for tracking (thread-safe)
+        # Include connection reference for later lookup
         @state_mutex.synchronize do
-          @subscriptions[char_path] = { callback: callback, wrapper: wrapper }
+          @subscriptions[char_path] = { callback: callback, wrapper: wrapper, connection: connection }
         end
         true
       rescue DBus::Error => e
@@ -896,13 +914,52 @@ module RBLE
         raise ConnectionTimeoutError, timeout
       end
 
-      # Enumerate GATT services and characteristics for a device
+      # Wait for a property to change using a DBusSession
+      # @param session [DBusSession] D-Bus session to use
+      # @param device_path [String] Device path to watch
+      # @param property [String] Property name (e.g., 'Connected', 'ServicesResolved')
+      # @param expected_value [Object] Expected property value
+      # @param timeout [Numeric] Timeout in seconds
+      # @raise [ConnectionTimeoutError] if timeout exceeded
+      def wait_for_property_on_session(session, device_path, property, expected_value, timeout)
+        # Subscribe to PropertiesChanged on the device
+        device_obj = session.object(device_path)
+        device_obj.introspect
+        props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
+
+        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+          session.enqueue(:properties_changed, device_path, changed) if interface == RBLE::BlueZ::DEVICE_INTERFACE
+        end
+
+        deadline = Time.now + timeout
+
+        loop do
+          remaining = deadline - Time.now
+          raise ConnectionTimeoutError, timeout if remaining <= 0
+
+          # Process events with timeout
+          shutdown = session.process_events(timeout: [remaining, 0.5].min) do |event|
+            next unless event.type == :properties_changed
+            next unless event.path == device_path
+            next unless event.data.is_a?(Hash) && event.data.key?(property)
+
+            return true if event.data[property] == expected_value
+          end
+
+          # Check if we received shutdown
+          break if shutdown
+        end
+
+        raise ConnectionTimeoutError, timeout
+      end
+
+      # Enumerate GATT services and characteristics for a device using a DBusSession
+      # @param session [DBusSession] D-Bus session to use
       # @param device_path [String] Device path
       # @return [Array<Hash>] Service data with characteristics and their paths
       #   Each hash contains: :uuid, :primary, :characteristics (array of {data:, path:})
-      def enumerate_services(device_path)
-        conn = ensure_connection
-        om = conn.object_manager
+      def enumerate_services_from_session(session, device_path)
+        om = session.object_manager
         managed = om.GetManagedObjects.first
 
         # Find all services under this device
