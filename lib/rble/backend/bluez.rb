@@ -414,9 +414,14 @@ module RBLE
         end
 
         # Store subscription for tracking (thread-safe)
-        # Include connection reference for later lookup
+        # Include connection reference and UUID for introspection
         @state_mutex.synchronize do
-          @subscriptions[char_path] = { callback: callback, wrapper: wrapper, connection: connection }
+          @subscriptions[char_path] = {
+            callback: callback,
+            wrapper: wrapper,
+            connection: connection,
+            uuid: wrapper.uuid
+          }
         end
         true
       rescue DBus::Error => e
@@ -426,6 +431,18 @@ module RBLE
           raise NotConnectedError
         end
         raise NotifyError, translate_dbus_error(e)
+      end
+
+      # Get active subscriptions for a connection
+      # @param connection [Connection] Connection to query
+      # @return [Array<Hash>] Subscription info hashes with :uuid and :path
+      def subscriptions_for_connection(connection)
+        @state_mutex.synchronize do
+          @subscriptions.select { |_path, sub| sub[:connection] == connection }
+                        .map do |path, sub|
+                          { path: path, uuid: sub[:uuid] }
+                        end
+        end
       end
 
       # Unsubscribe from characteristic notifications

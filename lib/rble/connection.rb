@@ -128,6 +128,15 @@ module RBLE
       @services
     end
 
+    # Get list of currently subscribed characteristic UUIDs
+    # Useful for debugging and status checking
+    # @return [Array<String>] UUIDs of subscribed characteristics (empty if none)
+    def active_subscriptions
+      return [] unless @backend.respond_to?(:subscriptions_for_connection)
+
+      @backend.subscriptions_for_connection(self).filter_map { |sub| sub[:uuid] }
+    end
+
     # Find a service by UUID
     # Supports both full UUID and short UUID (e.g., "180d")
     #
