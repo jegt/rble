@@ -426,8 +426,10 @@ module RBLE
     # @param address [String] Device MAC address (e.g., "AA:BB:CC:DD:EE:FF")
     # @param timeout [Numeric] Connection timeout in seconds (default: 30)
     # @param adapter [String, nil] Bluetooth adapter name (e.g., "hci0")
+    # @param device_name [String, nil] Device name for error messages (from scan)
     # @return [Connection] Connected device handle
     # @raise [ConnectionTimeoutError] if connection times out
+    # @raise [DeviceNotFoundError] if device not found or disappeared
     # @raise [ConnectionError] if connection fails
     #
     # @example
@@ -436,15 +438,21 @@ module RBLE
     #   # ... use services ...
     #   conn.disconnect
     #
-    def connect(address, timeout: 30, adapter: nil)
+    def connect(address, timeout: 30, adapter: nil, device_name: nil)
       backend = Backend.for_platform
 
       # Convert address to D-Bus path
       device_path = backend.device_path_for_address(address, adapter: adapter)
-      raise ConnectionError, "Device '#{address}' not found. Scan for devices first." unless device_path
+      raise DeviceNotFoundError.new(address, device_name: device_name) unless device_path
 
       # Connect via backend
-      backend.connect_device(device_path, timeout: timeout)
+      begin
+        backend.connect_device(device_path, timeout: timeout)
+      rescue DeviceNotFoundError => e
+        # Re-raise with device name if we have it and error doesn't already include it
+        raise DeviceNotFoundError.new(e.address, device_name: device_name) if device_name && !e.device_name
+        raise
+      end
 
       connection = Connection.new(
         address: address,

@@ -147,7 +147,16 @@ module RBLE
         # Create temporary D-Bus connection for the connect operation
         # This connection will be closed after connect completes
         conn = create_temporary_connection
-        device = RBLE::BlueZ::Device.new(conn, device_path)
+        begin
+          device = RBLE::BlueZ::Device.new(conn, device_path)
+        rescue DBus::Error => e
+          conn.disconnect
+          if e.name == 'org.freedesktop.DBus.Error.UnknownObject'
+            address = extract_address_from_path(device_path)
+            raise DeviceNotFoundError.new(address)
+          end
+          raise ConnectionError, "Failed to connect: #{e.message}"
+        end
 
         # Check if already connected at BlueZ level
         if device.connected?
@@ -175,6 +184,10 @@ module RBLE
           raise
         rescue DBus::Error => e
           cleanup_connection_event_loop(event_loop)
+          if e.name == 'org.freedesktop.DBus.Error.UnknownObject'
+            address = extract_address_from_path(device_path)
+            raise DeviceNotFoundError.new(address)
+          end
           raise ConnectionError, "Failed to connect: #{e.message}"
         ensure
           # Stop the event loop and close temporary connection
