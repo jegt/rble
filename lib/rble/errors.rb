@@ -160,6 +160,17 @@ module RBLE
     end
   end
 
+  # Raised when a D-Bus operation times out
+  class TimeoutError < Error
+    attr_reader :operation, :timeout_value
+
+    def initialize(operation, timeout_value)
+      @operation = operation
+      @timeout_value = timeout_value
+      super("#{operation} timed out after #{timeout_value}s")
+    end
+  end
+
   # Base class for backend selection errors
   class BackendUnavailableError < Error
     attr_reader :backend
