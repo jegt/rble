@@ -123,6 +123,19 @@ module RBLE
     end
   end
 
+  # Raised when subscribing to a characteristic that doesn't support notifications
+  class NotifyNotSupported < GATTError
+    attr_reader :uuid, :flags
+
+    def initialize(uuid, flags)
+      @uuid = uuid
+      @flags = flags
+      super("Characteristic #{uuid} does not support notifications. " \
+            "Flags: [#{flags.join(', ')}]. " \
+            "Characteristic must have 'notify' or 'indicate' flag.")
+    end
+  end
+
   # Raised when operation is not permitted by the characteristic
   class NotPermittedError < GATTError
     def initialize(operation = 'operation')

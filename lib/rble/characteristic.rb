@@ -184,12 +184,12 @@ module RBLE
     # @yield [String] Called with value (binary string) on each notification
     # @return [Boolean] true on success
     # @raise [ArgumentError] if no block given
-    # @raise [NotSupportedError] if characteristic doesn't support notifications
+    # @raise [NotifyNotSupported] if characteristic doesn't support notifications
     # @raise [NotConnectedError] if not connected
     # @raise [NotifyError] if subscription fails
     def subscribe(&)
       raise ArgumentError, 'Block required' unless block_given?
-      raise NotSupportedError, 'notify' unless subscribable?
+      raise NotifyNotSupported.new(short_uuid, flags) unless subscribable?
       raise NotConnectedError unless @connection.connected?
 
       # Pass connection so backend can use its D-Bus session for event delivery
