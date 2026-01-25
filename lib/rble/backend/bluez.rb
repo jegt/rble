@@ -297,11 +297,12 @@ module RBLE
       # Uses the Connection's DBusSession for D-Bus operations
       # @param char_path [String] D-Bus characteristic path
       # @param connection [Connection] Connection that owns this characteristic
-      # @param timeout [Numeric] Read timeout in seconds (currently unused - D-Bus handles timeout)
+      # @param timeout [Numeric] Read timeout in seconds (default: 5)
       # @return [String] Binary string (ASCII-8BIT encoding)
       # @raise [NotConnectedError] if device is not connected
       # @raise [ReadError] if read fails
-      def read_characteristic(char_path, connection:, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
+      # @raise [TimeoutError] if operation times out
+      def read_characteristic(char_path, connection:, timeout: 5)
         # Check connection before attempting read (thread-safe)
         device_path = extract_device_path(char_path)
         connected = @state_mutex.synchronize { device_path && @connected_devices.key?(device_path) }
@@ -311,13 +312,11 @@ module RBLE
         session = connection.dbus_session
         raise NotConnectedError, 'No active D-Bus session' unless session
 
-        wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
-
-        # Read value with empty options
-        result = wrapper.read_value({})
-
-        # Convert byte array to binary string
-        result.map(&:to_i).pack('C*')
+        with_timeout_and_retry('read', timeout: timeout) do
+          wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
+          result = wrapper.read_value({})
+          result.map(&:to_i).pack('C*')
+        end
       rescue DBus::Error => e
         # Check if disconnect related - handle unexpected disconnect
         if e.name == 'org.bluez.Error.NotConnected'
@@ -325,6 +324,8 @@ module RBLE
           raise NotConnectedError
         end
         raise ReadError, translate_dbus_error(e)
+      rescue TimeoutError
+        raise # Let timeout propagate as-is
       end
 
       # Write a value to a characteristic
@@ -333,11 +334,12 @@ module RBLE
       # @param data [String, Array<Integer>] Data to write
       # @param connection [Connection] Connection that owns this characteristic
       # @param response [Boolean] Wait for write response (true = 'request', false = 'command')
-      # @param timeout [Numeric] Write timeout in seconds (currently unused - D-Bus handles timeout)
+      # @param timeout [Numeric] Write timeout in seconds (default: 5)
       # @return [Boolean] true on success
       # @raise [NotConnectedError] if device is not connected
       # @raise [WriteError] if write fails
-      def write_characteristic(char_path, data, connection:, response: true, timeout: 30) # rubocop:disable Lint/UnusedMethodArgument
+      # @raise [TimeoutError] if operation times out
+      def write_characteristic(char_path, data, connection:, response: true, timeout: 5)
         # Check connection before attempting write (thread-safe)
         device_path = extract_device_path(char_path)
         connected = @state_mutex.synchronize { device_path && @connected_devices.key?(device_path) }
@@ -346,8 +348,6 @@ module RBLE
         # Use Connection's D-Bus session
         session = connection.dbus_session
         raise NotConnectedError, 'No active D-Bus session' unless session
-
-        wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
 
         # Convert string to bytes array if needed
         bytes = data.is_a?(String) ? data.bytes : data
@@ -359,7 +359,10 @@ module RBLE
           'type' => DBus::Data::Variant.new(type_value, member_type: DBus::Type::STRING)
         }
 
-        wrapper.write_value(bytes, options)
+        with_timeout_and_retry('write', timeout: timeout) do
+          wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
+          wrapper.write_value(bytes, options)
+        end
         true
       rescue DBus::Error => e
         # Check if disconnect related - handle unexpected disconnect
@@ -368,17 +371,21 @@ module RBLE
           raise NotConnectedError
         end
         raise WriteError, translate_dbus_error(e)
+      rescue TimeoutError
+        raise # Let timeout propagate as-is
       end
 
       # Subscribe to characteristic notifications
       # Uses the Connection's DBusSession for D-Bus operations and event delivery
       # @param char_path [String] D-Bus characteristic path
       # @param connection [Connection] Connection that owns this characteristic
+      # @param timeout [Numeric] Timeout for StartNotify call in seconds (default: 5)
       # @yield [String] Called with value (binary string) on each notification
       # @return [Boolean] true on success
       # @raise [NotConnectedError] if device is not connected
       # @raise [NotifyError] if subscription fails
-      def subscribe_characteristic(char_path, connection:, &callback)
+      # @raise [TimeoutError] if operation times out
+      def subscribe_characteristic(char_path, connection:, timeout: 5, &callback)
         # Check connection and subscription state (thread-safe)
         device_path = extract_device_path(char_path)
         already_subscribed, connected = @state_mutex.synchronize do
@@ -399,7 +406,9 @@ module RBLE
         RBLE.logger&.debug("[RBLE] Subscribing to #{char_path}")
 
         # Start notifications - BlueZ handles CCCD automatically
-        wrapper.start_notify
+        with_timeout_and_retry('subscribe', timeout: timeout) do
+          wrapper.start_notify
+        end
 
         RBLE.logger&.debug("[RBLE] StartNotify called for #{char_path}")
 
@@ -443,6 +452,8 @@ module RBLE
           raise NotConnectedError
         end
         raise NotifyError, translate_dbus_error(e)
+      rescue TimeoutError
+        raise # Let timeout propagate as-is
       end
 
       # Get active subscriptions for a connection
