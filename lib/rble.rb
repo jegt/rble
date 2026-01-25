@@ -10,6 +10,15 @@ require_relative 'rble/scanner'
 require_relative 'rble/connection'
 
 module RBLE
+  class << self
+    # Logger for debug output
+    # Set to a Logger instance with debug level to see notification flow
+    # @example
+    #   RBLE.logger = Logger.new(STDOUT)
+    #   RBLE.logger.level = Logger::DEBUG
+    attr_accessor :logger
+  end
+
   # Backend selection API - delegates to RBLE::Backend
 
   def self.backend
