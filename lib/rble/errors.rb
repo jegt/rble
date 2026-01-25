@@ -200,4 +200,40 @@ module RBLE
       )
     end
   end
+
+  # Raised when Bluetooth adapter is down (needs to be brought up with hciconfig)
+  class AdapterDownError < Error
+    def initialize
+      super(<<~MESSAGE.chomp)
+        Bluetooth adapter is down.
+
+        After stopping the BlueZ daemon, the adapter needs to be brought up manually:
+          sudo hciconfig hci0 up
+
+        Or restart the BlueZ daemon (which manages the adapter automatically):
+          sudo systemctl start bluetooth
+      MESSAGE
+    end
+  end
+
+  # Raised when Linux capabilities (CAP_NET_RAW, CAP_NET_ADMIN) are missing
+  class CapabilityError < BackendUnavailableError
+    def initialize(helper_path = nil)
+      helper_info = helper_path ? "\n    #{helper_path}" : ''
+      super(
+        backend: :bluetooth_linux,
+        reason: 'Missing required Linux capabilities (CAP_NET_RAW, CAP_NET_ADMIN)',
+        suggestion: <<~SUGGESTION.chomp
+          Option 1 - Run with sudo:
+            sudo ruby your_script.rb
+
+          Option 2 - Grant capabilities to the helper binary (persistent):
+            sudo setcap cap_net_raw,cap_net_admin+eip #{helper_path || '<helper_path>'}
+
+          Option 3 - Use BlueZ backend instead (no root needed):
+            RBLE.backend = :bluez
+        SUGGESTION
+      )
+    end
+  end
 end

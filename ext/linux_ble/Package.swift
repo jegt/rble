@@ -13,8 +13,8 @@ let package = Package(
     ],
     dependencies: [
         // BluetoothLinux - direct HCI access bypassing D-Bus
-        // Using master branch as stable releases have dependency resolution issues with Swift 6
-        .package(url: "https://github.com/PureSwift/BluetoothLinux.git", branch: "master"),
+        // Using fork with HCI event filter fix (PR #51) until merged upstream
+        .package(url: "https://github.com/jegt/BluetoothLinux.git", branch: "fix/hci-event-filter-high-events"),
         // GATT - Generic Attribute Profile implementation
         .package(url: "https://github.com/PureSwift/GATT.git", branch: "master")
     ],

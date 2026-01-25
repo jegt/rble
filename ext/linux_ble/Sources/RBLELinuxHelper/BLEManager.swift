@@ -32,6 +32,106 @@ struct ConnectionState {
     var intentionalDisconnect: Bool = false  // Flag to distinguish user vs unexpected disconnect
 }
 
+/// Cached device data that merges advertising + scan response packets
+struct CachedDeviceData {
+    var name: String?
+    var rssi: Int
+    var serviceUUIDs: [String]?
+    var manufacturerData: (companyId: Int, data: [Int])?
+    var serviceData: [String: [Int]]?
+    var txPower: Int?
+    var connectable: Bool
+    var lastSeen: Date
+
+    /// Merge new scan data into this cache, preferring non-nil values
+    mutating func merge(from scanData: ScanData<LinuxCentral.Peripheral, LinuxCentral.Advertisement>) {
+        let adv = scanData.advertisementData
+
+        // Always update RSSI and timestamp
+        rssi = Int(scanData.rssi)
+        lastSeen = Date()
+
+        // Prefer existing name, but update if we get a new one
+        if let newName = adv.localName, !newName.isEmpty {
+            name = newName
+        }
+
+        // Merge service UUIDs
+        if let newUUIDs = adv.serviceUUIDs, !newUUIDs.isEmpty {
+            let newStrings = newUUIDs.map { $0.rawValue.uppercased() }
+            if var existing = serviceUUIDs {
+                // Add new UUIDs that aren't already present
+                for uuid in newStrings where !existing.contains(uuid) {
+                    existing.append(uuid)
+                }
+                serviceUUIDs = existing
+            } else {
+                serviceUUIDs = newStrings
+            }
+        }
+
+        // Update manufacturer data if present
+        if let mfgData = adv.manufacturerData {
+            manufacturerData = (
+                companyId: Int(mfgData.companyIdentifier.rawValue),
+                data: Array(mfgData.additionalData).map { Int($0) }
+            )
+        }
+
+        // Merge service data
+        if let newServiceData = adv.serviceData, !newServiceData.isEmpty {
+            var merged = serviceData ?? [:]
+            for (uuid, data) in newServiceData {
+                merged[uuid.rawValue.uppercased()] = Array(data).map { Int($0) }
+            }
+            serviceData = merged
+        }
+
+        // Update tx power if present
+        if let newTxPower = adv.txPowerLevel {
+            txPower = Int(newTxPower)
+        }
+
+        // Update connectable status
+        connectable = scanData.isConnectable
+    }
+
+    /// Convert to event params dictionary
+    func toEventParams(address: String) -> [String: AnyCodable] {
+        var params: [String: AnyCodable] = [
+            "address": AnyCodable(address),
+            "rssi": AnyCodable(rssi)
+        ]
+
+        if let name = name {
+            params["name"] = AnyCodable(name)
+        }
+
+        if let uuids = serviceUUIDs, !uuids.isEmpty {
+            params["service_uuids"] = AnyCodable(uuids)
+        }
+
+        if let mfg = manufacturerData {
+            params["manufacturer_data"] = AnyCodable([
+                "company_id": mfg.companyId,
+                "data": mfg.data
+            ])
+        }
+
+        if let sd = serviceData, !sd.isEmpty {
+            params["service_data"] = AnyCodable(sd)
+        }
+
+        if let tx = txPower {
+            params["tx_power"] = AnyCodable(tx)
+        }
+
+        params["connectable"] = AnyCodable(connectable)
+
+        return params
+    }
+}
+
 // MARK: - BLEManager
 
 /// BluetoothLinux wrapper that manages Bluetooth scanning and device discovery.
@@ -43,6 +143,7 @@ struct ConnectionState {
 class BLEManager {
     private var hostController: HostController?
     private var central: LinuxCentral?
+    private var cachedLocalAddress: BluetoothAddress?  // Pre-cached to avoid HCI blocking during scan
     private var scanStream: AsyncCentralScan<LinuxCentral>?
     private var scanTask: Task<Void, Never>?
     private var timeoutWorkItem: DispatchWorkItem?
@@ -50,6 +151,16 @@ class BLEManager {
     private var reportedPeripherals: Set<BluetoothAddress> = []
     private var allowDuplicates = false
     private var filterServiceUUIDs: [String]? = nil
+
+    /// Cache of discovered device data, keyed by address
+    /// Used to merge advertising + scan response data before reporting
+    private var deviceCache: [BluetoothAddress: CachedDeviceData] = [:]
+
+    /// Pending emit timers for devices (wait for scan response before emitting)
+    private var pendingEmits: [BluetoothAddress: DispatchWorkItem] = [:]
+
+    /// Delay before emitting a device (allows scan response to arrive)
+    private let emitDelay: TimeInterval = 0.15  // 150ms
 
     /// Active connections keyed by BluetoothAddress
     private var connections: [BluetoothAddress: ConnectionState] = [:]
@@ -76,15 +187,31 @@ class BLEManager {
     private func ensureInitialized() async throws {
         guard hostController == nil else { return }
 
-        // Find first available controller
-        let controllers = await HostController.controllers
-        guard let controller = controllers.first else {
-            throw LinuxBLEError.adapterNotFound
+        // Use HostController.default as recommended by PureSwift documentation
+        guard let controller = await HostController.default else {
+            let controllers = await HostController.controllers
+            guard let firstController = controllers.first else {
+                throw LinuxBLEError.adapterNotFound
+            }
+            hostController = firstController
+            central = LinuxCentral(hostController: firstController, socket: BluetoothLinux.L2CAPSocket.Connection.self)
+            central?.log = { message in
+                FileHandle.standardError.write("GATT: \(message)\n".data(using: .utf8)!)
+            }
+            // Pre-cache the local address while HCI isn't busy (before scanning starts)
+            cachedLocalAddress = try await firstController.readDeviceAddress()
+            return
         }
+
         hostController = controller
 
         // Create GATTCentral with L2CAP socket type
         central = LinuxCentral(hostController: controller, socket: BluetoothLinux.L2CAPSocket.Connection.self)
+        central?.log = { message in
+            FileHandle.standardError.write("GATT: \(message)\n".data(using: .utf8)!)
+        }
+        // Pre-cache the local address while HCI isn't busy (before scanning starts)
+        cachedLocalAddress = try await controller.readDeviceAddress()
     }
 
     // MARK: - Public Methods
@@ -108,6 +235,8 @@ class BLEManager {
         self.allowDuplicates = allowDuplicates
         self.filterServiceUUIDs = serviceUUIDs
         self.reportedPeripherals = []
+        self.deviceCache = [:]
+        self.pendingEmits = [:]
 
         // Start scanning - we do our own deduplication for macOS parity
         // Setting filterDuplicates: false at HCI level gives us full control
@@ -120,6 +249,7 @@ class BLEManager {
             do {
                 for try await scanData in stream {
                     guard let self = self else { break }
+                    let address = scanData.peripheral.id
 
                     // Apply service UUID filter if specified
                     if let filterUUIDs = self.filterServiceUUIDs {
@@ -130,16 +260,37 @@ class BLEManager {
                         guard hasMatch else { continue }
                     }
 
-                    // Deduplication when !allowDuplicates
-                    // Use peripheral.id (BluetoothAddress) for tracking
-                    if !self.allowDuplicates {
-                        guard !self.reportedPeripherals.contains(scanData.peripheral.id) else { continue }
-                        self.reportedPeripherals.insert(scanData.peripheral.id)
+                    // Merge data into cache (handles advertising + scan response merging)
+                    let isNewDevice = self.deviceCache[address] == nil
+
+                    if var cached = self.deviceCache[address] {
+                        cached.merge(from: scanData)
+                        self.deviceCache[address] = cached
+                    } else {
+                        var newCache = CachedDeviceData(
+                            name: nil,
+                            rssi: Int(scanData.rssi),
+                            serviceUUIDs: nil,
+                            manufacturerData: nil,
+                            serviceData: nil,
+                            txPower: nil,
+                            connectable: scanData.isConnectable,
+                            lastSeen: Date()
+                        )
+                        newCache.merge(from: scanData)
+                        self.deviceCache[address] = newCache
                     }
 
-                    // Convert to event and dispatch via onEvent callback
-                    let event = self.scanDataToEvent(scanData)
-                    self.onEvent?(event)
+                    // Decide whether to report this device
+                    if self.allowDuplicates {
+                        // Report every update immediately
+                        self.emitDeviceEvent(address: address)
+                    } else if isNewDevice {
+                        // New device: schedule delayed emit to allow scan response to arrive
+                        self.scheduleDelayedEmit(address: address)
+                    }
+                    // If not new and !allowDuplicates, just update the cache silently
+                    // (the pending emit timer will use the updated data)
                 }
             } catch {
                 // Scan cancelled or error - expected during stopScan
@@ -162,7 +313,12 @@ class BLEManager {
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
 
+        // Cancel pending device emits
+        cancelPendingEmits()
+
         // Stop the scan stream and task
+        let wasScanning = scanStream?.isScanning ?? false
+        FileHandle.standardError.write("DEBUG: stopScan() - wasScanning=\(wasScanning)\n".data(using: .utf8)!)
         scanStream?.stop()
         scanTask?.cancel()
         scanStream = nil
@@ -200,9 +356,13 @@ class BLEManager {
             throw LinuxBLEError.adapterNotFound
         }
 
+        // Stop scanning before connecting (GATT connect works better without active scan)
+        stopScan()
+
         // Find peripheral in scan cache (Pitfall 1 from research)
         // central.peripherals returns [Peripheral: Bool] where key is peripheral, value is connection status
         let peripherals = await central.peripherals
+        FileHandle.standardError.write("DEBUG: Looking for \(bluetoothAddress) in \(peripherals.keys.map { $0.id.rawValue })\n".data(using: .utf8)!)
         guard let peripheral = peripherals.keys.first(where: { $0.id == bluetoothAddress }) else {
             throw LinuxBLEError.deviceNotFound(normalizedAddress)
         }
@@ -220,16 +380,48 @@ class BLEManager {
         do {
             try await central.connect(to: peripheral)
 
-            // Cancel timeout on success
-            timeoutWorkItem.cancel()
-            connectingAddresses.removeValue(forKey: bluetoothAddress)
+            // IMPORTANT: GATTCentral.connect() returns immediately after starting
+            // the async L2CAP connection - it doesn't wait for it to complete.
+            // We need to verify the connection actually established by waiting
+            // and checking if the peripheral is still in the connected state.
+            // The background run() task will remove the connection if L2CAP fails.
 
-            // Check if timed out while connecting
-            if timedOut {
-                // Disconnect since we told Ruby it timed out
+            // Wait for connection to stabilize (L2CAP to actually connect)
+            var connectionVerified = false
+            for _ in 0..<50 {  // Poll for up to 5 seconds (50 x 100ms)
+                try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+
+                // Check if timed out
+                if timedOut {
+                    await central.disconnect(peripheral)
+                    throw LinuxBLEError.connectionTimeout
+                }
+
+                // Check if connection is still valid
+                let peripherals = await central.peripherals
+                if let isConnected = peripherals[peripheral], isConnected {
+                    connectionVerified = true
+                    break
+                }
+
+                // If peripheral was removed from cache, connection failed
+                if peripherals[peripheral] == nil {
+                    throw LinuxBLEError.connectionFailed(
+                        NSError(domain: "BLE", code: -1, userInfo: [
+                            NSLocalizedDescriptionKey: "Connection failed during L2CAP establishment"
+                        ])
+                    )
+                }
+            }
+
+            if !connectionVerified {
                 await central.disconnect(peripheral)
                 throw LinuxBLEError.connectionTimeout
             }
+
+            // Cancel timeout on success
+            timeoutWorkItem.cancel()
+            connectingAddresses.removeValue(forKey: bluetoothAddress)
 
             // Start monitoring task for disconnect detection
             let monitorTask = Task { @MainActor [weak self] in
@@ -742,6 +934,38 @@ class BLEManager {
         }
         let event = Event(method: "disconnected", params: params)
         onEvent?(event)
+    }
+
+    /// Emit a device_discovered event from cached data
+    private func emitDeviceEvent(address: BluetoothAddress) {
+        guard let cached = deviceCache[address] else { return }
+        let params = cached.toEventParams(address: address.rawValue.uppercased())
+        let event = Event(method: "device_discovered", params: params)
+        onEvent?(event)
+    }
+
+    /// Schedule a delayed emit for a device (allows scan response to arrive first)
+    private func scheduleDelayedEmit(address: BluetoothAddress) {
+        // Cancel any existing pending emit for this device
+        pendingEmits[address]?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.pendingEmits.removeValue(forKey: address)
+            self.reportedPeripherals.insert(address)
+            self.emitDeviceEvent(address: address)
+        }
+
+        pendingEmits[address] = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + emitDelay, execute: workItem)
+    }
+
+    /// Cancel all pending device emits
+    private func cancelPendingEmits() {
+        for (_, workItem) in pendingEmits {
+            workItem.cancel()
+        }
+        pendingEmits.removeAll()
     }
 
     // MARK: - Scan Data Conversion
