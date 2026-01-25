@@ -1,0 +1,159 @@
+# frozen_string_literal: true
+
+module RBLE
+  module BlueZ
+    # Encapsulates a D-Bus connection and event loop lifecycle for a single BLE session.
+    #
+    # Each DBusSession provides an isolated D-Bus communication channel with its own
+    # event loop. This design eliminates state corruption issues that occur when a
+    # shared D-Bus connection is used across multiple operations (scan, connect, notify).
+    #
+    # Key design decisions:
+    # - Composition over inheritance: DBusSession composes DBusConnection + EventLoop
+    # - Event loop uses the session's connection.bus
+    # - Session tracks its own lifecycle (connected/running state)
+    # - Thread::Queue is owned by EventLoop (already implemented there)
+    #
+    # @example Basic usage
+    #   session = RBLE::BlueZ::DBusSession.new
+    #   session.connect
+    #   session.start_event_loop
+    #   # ... use session.bus for D-Bus operations ...
+    #   session.disconnect  # stops event loop and closes connection
+    #
+    class DBusSession
+      # Create a new DBusSession (not yet connected)
+      def initialize
+        @connection = nil
+        @event_loop = nil
+        @mutex = Mutex.new
+      end
+
+      # Connect to the D-Bus system bus
+      # Creates a new DBusConnection and establishes connection to BlueZ
+      # @return [void]
+      # @raise [PermissionError] if permission denied
+      # @raise [Error] if BlueZ service not available
+      def connect
+        @mutex.synchronize do
+          return if @connection&.connected?
+
+          @connection = DBusConnection.new
+          @connection.connect
+        end
+      end
+
+      # Start the event loop in a background thread
+      # The event loop processes D-Bus signals and enqueues events for the main thread
+      # @return [void]
+      # @raise [Error] if not connected
+      def start_event_loop
+        @mutex.synchronize do
+          raise Error, 'Cannot start event loop: not connected' unless @connection&.connected?
+          return if @event_loop&.running?
+
+          @event_loop = EventLoop.new
+          @event_loop.start(@connection.bus)
+        end
+      end
+
+      # Stop the event loop
+      # Waits for the background thread to finish
+      # @param timeout [Numeric] Maximum seconds to wait for thread
+      # @return [void]
+      def stop_event_loop(timeout: 1)
+        @mutex.synchronize do
+          @event_loop&.stop(timeout: timeout)
+        end
+      end
+
+      # Disconnect from D-Bus
+      # Stops the event loop (if running) and closes the D-Bus connection
+      # After disconnect, the session cannot be reused - create a new session instead
+      # @return [void]
+      def disconnect
+        @mutex.synchronize do
+          # Stop event loop first to prevent signal handlers from firing
+          @event_loop&.stop(timeout: 1)
+          @event_loop = nil
+
+          # Close D-Bus connection
+          @connection&.disconnect
+          @connection = nil
+        end
+      end
+
+      # Check if connected to D-Bus
+      # @return [Boolean]
+      def connected?
+        @mutex.synchronize { @connection&.connected? || false }
+      end
+
+      # Check if event loop is running
+      # @return [Boolean]
+      def running?
+        @mutex.synchronize { @event_loop&.running? || false }
+      end
+
+      # Get the D-Bus bus for signal registration
+      # @return [DBus::SystemBus, nil]
+      def bus
+        @mutex.synchronize { @connection&.bus }
+      end
+
+      # Get a D-Bus object by path
+      # @param path [String] D-Bus object path
+      # @return [DBus::ProxyObject]
+      # @raise [Error] if not connected
+      def object(path)
+        conn = @mutex.synchronize { @connection }
+        raise Error, 'Not connected' unless conn&.connected?
+
+        conn.object(path)
+      end
+
+      # Get the ObjectManager interface
+      # @return [DBus::ProxyObjectInterface]
+      # @raise [Error] if not connected
+      def object_manager
+        conn = @mutex.synchronize { @connection }
+        raise Error, 'Not connected' unless conn&.connected?
+
+        conn.object_manager
+      end
+
+      # Enqueue an event for processing
+      # Thread-safe - can be called from D-Bus signal handlers
+      # @param type [Symbol] Event type (:device_found, :notification, etc.)
+      # @param path [String, nil] D-Bus object path
+      # @param data [Hash, nil] Event-specific data
+      # @return [void]
+      def enqueue(type, path, data)
+        event_loop = @mutex.synchronize { @event_loop }
+        event_loop&.enqueue(type, path, data)
+      end
+
+      # Process events from the queue with a timeout
+      # Yields each event to the block until shutdown or timeout
+      # @param timeout [Numeric, nil] Timeout in seconds (nil = block forever)
+      # @yield [Event] Called for each event
+      # @return [Boolean] true if shutdown received, false if timeout
+      def process_events(timeout: nil, &block)
+        event_loop = @mutex.synchronize { @event_loop }
+        return false unless event_loop
+
+        event_loop.process_events(timeout: timeout, &block)
+      end
+
+      # Non-blocking drain of all pending events
+      # @yield [Event] Called for each event
+      # @return [Integer] Number of events processed
+      def drain_events(&block)
+        event_loop = @mutex.synchronize { @event_loop }
+        return 0 unless event_loop
+
+        event_loop.drain_events(&block)
+      end
+    end
+  end
+end
