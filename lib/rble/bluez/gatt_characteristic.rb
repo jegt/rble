@@ -2,7 +2,12 @@
 
 module RBLE
   module BlueZ
-    # Wrapper for BlueZ GattCharacteristic1 D-Bus interface
+    # @deprecated Use AsyncGattOperations methods on DBusSession instead.
+    #   This class uses synchronous D-Bus calls which block the event loop.
+    #   In v0.4.0+, use session.async_read_value, session.async_write_value,
+    #   session.async_start_notify, and session.async_stop_notify.
+    #
+    # Wrapper for BlueZ GattCharacteristic1 D-Bus interface (DEPRECATED)
     class GattCharacteristic
       attr_reader :path, :uuid
 
@@ -18,6 +23,7 @@ module RBLE
         @uuid = get_property('UUID')
       end
 
+      # @deprecated Use AsyncGattOperations methods on DBusSession instead.
       # Create a GattCharacteristic from a DBusSession
       # @param session [DBusSession] Active D-Bus session
       # @param char_path [String] D-Bus characteristic path
