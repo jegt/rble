@@ -321,24 +321,16 @@ module RBLE
         connected = @state_mutex.synchronize { device_path && @connected_devices.key?(device_path) }
         raise NotConnectedError unless connected
 
-        # Use Connection's D-Bus session
+        # Use Connection's D-Bus session with async GATT operation
         session = connection.dbus_session
         raise NotConnectedError, 'No active D-Bus session' unless session
 
-        with_timeout_and_retry('read', timeout: timeout) do
-          wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
-          result = wrapper.read_value({})
-          result.map(&:to_i).pack('C*')
-        end
-      rescue DBus::Error => e
-        # Check if disconnect related - handle unexpected disconnect
-        if e.name == 'org.bluez.Error.NotConnected'
-          handle_unexpected_disconnect(device_path) if device_path
-          raise NotConnectedError
-        end
-        raise ReadError, translate_dbus_error(e)
-      rescue TimeoutError
-        raise # Let timeout propagate as-is
+        # Async read - does not block event loop, handles timeout internally
+        session.async_read_value(char_path, timeout: timeout)
+      rescue NotConnectedError
+        # Handle unexpected disconnect
+        handle_unexpected_disconnect(device_path) if device_path
+        raise
       end
 
       # Write a value to a characteristic
@@ -358,34 +350,19 @@ module RBLE
         connected = @state_mutex.synchronize { device_path && @connected_devices.key?(device_path) }
         raise NotConnectedError unless connected
 
-        # Use Connection's D-Bus session
+        # Use Connection's D-Bus session with async GATT operation
         session = connection.dbus_session
         raise NotConnectedError, 'No active D-Bus session' unless session
 
         # Convert string to bytes array if needed
         bytes = data.is_a?(String) ? data.bytes : data
 
-        # Build options with type variant
-        # 'request' = write with response (default), 'command' = write without response
-        type_value = response ? 'request' : 'command'
-        options = {
-          'type' => DBus::Data::Variant.new(type_value, member_type: DBus::Type::STRING)
-        }
-
-        with_timeout_and_retry('write', timeout: timeout) do
-          wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
-          wrapper.write_value(bytes, options)
-        end
-        true
-      rescue DBus::Error => e
-        # Check if disconnect related - handle unexpected disconnect
-        if e.name == 'org.bluez.Error.NotConnected'
-          handle_unexpected_disconnect(device_path) if device_path
-          raise NotConnectedError
-        end
-        raise WriteError, translate_dbus_error(e)
-      rescue TimeoutError
-        raise # Let timeout propagate as-is
+        # Async write - does not block event loop, handles timeout internally
+        session.async_write_value(char_path, bytes, response: response, timeout: timeout)
+      rescue NotConnectedError
+        # Handle unexpected disconnect
+        handle_unexpected_disconnect(device_path) if device_path
+        raise
       end
 
       # Subscribe to characteristic notifications
@@ -414,20 +391,27 @@ module RBLE
         session = connection.dbus_session
         raise NotConnectedError, 'No active D-Bus session' unless session
 
-        wrapper = RBLE::BlueZ::GattCharacteristic.new_from_session(session, char_path)
-
         RBLE.logger&.debug("[RBLE] Subscribing to #{char_path}")
 
-        # Start notifications - BlueZ handles CCCD automatically
-        with_timeout_and_retry('subscribe', timeout: timeout) do
-          wrapper.start_notify
-        end
+        # Async start notifications - does not block event loop
+        # Idempotent: returns true if already notifying (handled by async module)
+        session.async_start_notify(char_path, timeout: timeout)
 
         RBLE.logger&.debug("[RBLE] StartNotify called for #{char_path}")
 
+        # Get introspected proxy for PropertiesChanged signal handler
+        # Uses cached introspection from async_start_notify call
+        proxy = session.async_introspect(char_path, timeout: timeout)
+        props_iface = proxy[RBLE::BlueZ::PROPERTIES_INTERFACE]
+
+        # Get UUID from characteristic properties
+        char_uuid = proxy[RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE].Get(
+          RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE, 'UUID'
+        ).first
+
         # Subscribe to PropertiesChanged signal for value updates
         # Events are enqueued to the Connection's event loop
-        wrapper.on_properties_changed do |interface, changed, _invalidated|
+        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
           next unless interface == RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE
           next unless changed.key?('Value')
 
@@ -444,13 +428,13 @@ module RBLE
         end
 
         # Store subscription for tracking (thread-safe)
-        # Include connection reference and UUID for introspection
+        # Include connection reference, UUID, and proxy for cleanup
         @state_mutex.synchronize do
           @subscriptions[char_path] = {
             callback: callback,
-            wrapper: wrapper,
+            proxy: proxy,
             connection: connection,
-            uuid: wrapper.uuid
+            uuid: char_uuid
           }
         end
 
@@ -458,15 +442,10 @@ module RBLE
         connection.ensure_notification_processing
 
         true
-      rescue DBus::Error => e
-        # Check if disconnect related - handle unexpected disconnect
-        if e.name == 'org.bluez.Error.NotConnected'
-          handle_unexpected_disconnect(device_path) if device_path
-          raise NotConnectedError
-        end
-        raise NotifyError, translate_dbus_error(e)
-      rescue TimeoutError
-        raise # Let timeout propagate as-is
+      rescue NotConnectedError
+        # Handle unexpected disconnect
+        handle_unexpected_disconnect(device_path) if device_path
+        raise
       end
 
       # Get active subscriptions for a connection
@@ -483,9 +462,10 @@ module RBLE
 
       # Unsubscribe from characteristic notifications
       # @param char_path [String] D-Bus characteristic path
+      # @param connection [Connection] Connection that owns this subscription
       # @return [Boolean] true on success
       # @raise [NotConnectedError] if device is not connected
-      def unsubscribe_characteristic(char_path)
+      def unsubscribe_characteristic(char_path, connection: nil)
         RBLE.logger&.debug("[RBLE] Unsubscribing from #{char_path}")
 
         device_path = extract_device_path(char_path)
@@ -499,15 +479,20 @@ module RBLE
         # Check connection before attempting unsubscribe
         raise NotConnectedError unless connected
 
+        # Use provided connection or fall back to stored one
+        conn = connection || subscription[:connection]
+        session = conn&.dbus_session
+        return true unless session
+
         begin
-          subscription[:wrapper].stop_notify
+          # Async stop notify - does not block event loop
+          session.async_stop_notify(char_path, timeout: 5)
           RBLE.logger&.debug("[RBLE] StopNotify called for #{char_path}")
-        rescue DBus::Error => e
-          # Check if disconnect related - handle unexpected disconnect
-          if e.name == 'org.bluez.Error.NotConnected'
-            handle_unexpected_disconnect(device_path) if device_path
-            raise NotConnectedError
-          end
+        rescue NotConnectedError
+          # Handle unexpected disconnect
+          handle_unexpected_disconnect(device_path) if device_path
+          raise
+        rescue StandardError
           # Ignore other errors during cleanup
         end
 
