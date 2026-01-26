@@ -836,34 +836,19 @@ module RBLE
         end
       end
 
-      # Unsubscribe from all registered D-Bus signal handlers
-      # Calling on_signal without a block unregisters the handler in ruby-dbus
-      def unsubscribe_signal_handlers
-        @signal_handlers.each do |entry|
-          case entry.first
-          when :interfaces_added
-            entry[1].on_signal('InterfacesAdded')
-          when :interfaces_removed
-            entry[1].on_signal('InterfacesRemoved')
-          when :properties_changed
-            entry[1].on_signal('PropertiesChanged')
-          end
-        rescue StandardError
-          # Ignore errors during signal cleanup
-        end
-        @signal_handlers.clear
-      end
-
       # Clean up scan-specific state by destroying the temporary scan session
       # After this, the scan D-Bus connection is never reused (fresh session per scan)
       def stop_scan_cleanup
-        # Unsubscribe signal handlers before destroying session
-        unsubscribe_signal_handlers
-
         # Destroy the temporary scan session (stops event loop and closes D-Bus connection)
+        # Signal handlers are automatically dropped when the D-Bus connection closes.
+        # We don't call unsubscribe_signal_handlers here because remove_match is a
+        # synchronous D-Bus call that deadlocks when the event loop is still running.
         @scan_session&.disconnect
         @scan_session = nil
         @scan_adapter_path = nil
+
+        # Clear signal handler tracking (handlers already invalidated by connection close)
+        @signal_handlers.clear
 
         # Clear scan-specific state only
         @state_mutex.synchronize do
@@ -878,9 +863,13 @@ module RBLE
       # Called on errors or when backend needs to be completely reset
       def cleanup
         # Stop scan session if active
+        # Signal handlers are automatically dropped when connection closes
         @scan_session&.disconnect
         @scan_session = nil
         @scan_adapter_path = nil
+
+        # Clear signal handler tracking (handlers already invalidated by connection close)
+        @signal_handlers.clear
 
         # Clear all shared state atomically
         @state_mutex.synchronize do
@@ -892,7 +881,6 @@ module RBLE
           @subscriptions.clear
         end
 
-        unsubscribe_signal_handlers
         @scan_callback = nil
       end
 
