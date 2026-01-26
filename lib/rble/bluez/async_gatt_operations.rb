@@ -51,18 +51,21 @@ module RBLE
         proxy = async_introspect(char_path, timeout: timeout)
         char_iface = proxy[GATT_CHARACTERISTIC_INTERFACE]
 
-        result = async_call("ReadValue(#{uuid})", timeout: timeout) do |queue, _request_id|
+        result = async_call("ReadValue(#{uuid})", timeout: timeout) do |queue, _request_id, cancelled|
           char_iface.ReadValue({}) do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
-              queue.push([nil, reply])
+              # Extract params from DBus::Message - ReadValue returns [Array<Byte>]
+              params = reply.respond_to?(:params) ? reply.params : [reply]
+              queue.push([nil, params.first])
             end
           end
         end
 
         # Convert D-Bus byte array to binary string
-        bytes = result&.first || []
+        bytes = result || []
         bytes.map(&:to_i).pack('C*')
       rescue DBus::Error => e
         translate_gatt_error(e, char_path, 'Read')
@@ -93,8 +96,9 @@ module RBLE
           'type' => DBus::Data::Variant.new(type_value, member_type: DBus::Type::STRING)
         }
 
-        async_call("WriteValue(#{uuid})", timeout: effective_timeout) do |queue, _request_id|
+        async_call("WriteValue(#{uuid})", timeout: effective_timeout) do |queue, _request_id, cancelled|
           char_iface.WriteValue(bytes, options) do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
@@ -121,20 +125,20 @@ module RBLE
 
         proxy = async_introspect(char_path, timeout: timeout)
         char_iface = proxy[GATT_CHARACTERISTIC_INTERFACE]
-        props_iface = proxy[PROPERTIES_INTERFACE]
 
-        # Check flags before calling (CONTEXT.md: NotifyNotSupported error)
-        flags = props_iface.Get(GATT_CHARACTERISTIC_INTERFACE, 'Flags').first
+        # Check flags before calling (use async to avoid deadlock)
+        flags = async_get_property(char_path, GATT_CHARACTERISTIC_INTERFACE, 'Flags', timeout: timeout)
         unless flags.include?('notify') || flags.include?('indicate')
           raise NotifyNotSupported.new(uuid, flags)
         end
 
-        # Idempotent: return early if already notifying (CONTEXT.md decision)
-        notifying = props_iface.Get(GATT_CHARACTERISTIC_INTERFACE, 'Notifying').first
+        # Idempotent: return early if already notifying (use async to avoid deadlock)
+        notifying = async_get_property(char_path, GATT_CHARACTERISTIC_INTERFACE, 'Notifying', timeout: timeout)
         return true if notifying
 
-        async_call("StartNotify(#{uuid})", timeout: timeout) do |queue, _request_id|
+        async_call("StartNotify(#{uuid})", timeout: timeout) do |queue, _request_id, cancelled|
           char_iface.StartNotify do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
@@ -161,8 +165,9 @@ module RBLE
         proxy = async_introspect(char_path, timeout: timeout)
         char_iface = proxy[GATT_CHARACTERISTIC_INTERFACE]
 
-        async_call("StopNotify(#{uuid})", timeout: timeout) do |queue, _request_id|
+        async_call("StopNotify(#{uuid})", timeout: timeout) do |queue, _request_id, cancelled|
           char_iface.StopNotify do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else

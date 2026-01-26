@@ -14,7 +14,7 @@ module RBLE
     #
     # Including class must:
     # - Include AsyncCall module (provides async_call method)
-    # - Have @service attribute pointing to D-Bus service
+    # - Provide a `service` method returning the D-Bus service
     #
     # @example
     #   include AsyncCall
@@ -54,23 +54,30 @@ module RBLE
 
       # Asynchronously get all managed objects from ObjectManager
       #
-      # Calls GetManagedObjects on the root object's ObjectManager interface.
-      # This returns a hash of all D-Bus object paths to their interfaces.
+      # Creates the D-Bus message directly to avoid triggering synchronous
+      # introspection when accessing proxy interfaces.
       #
       # @param timeout [Numeric] Timeout in seconds (default: 10)
       # @return [Hash] path => { interface_name => { property => value } }
       # @raise [TimeoutError] if call times out
       # @raise [DBus::Error] if D-Bus call fails
       def async_get_managed_objects(timeout: 10)
-        proxy = @service.object(ROOT_PATH)
-        object_manager = proxy[OBJECT_MANAGER_INTERFACE]
+        result = async_call('GetManagedObjects', timeout: timeout) do |queue, _request_id, cancelled|
+          # Create message directly to avoid sync introspection
+          msg = DBus::Message.new(DBus::Message::METHOD_CALL)
+          msg.path = ROOT_PATH
+          msg.interface = OBJECT_MANAGER_INTERFACE
+          msg.destination = service.name
+          msg.member = 'GetManagedObjects'
+          msg.sender = service.connection.unique_name
 
-        result = async_call('GetManagedObjects', timeout: timeout) do |queue, _request_id|
-          object_manager.GetManagedObjects do |reply|
+          service.connection.send_sync_or_async(msg) do |reply, *params|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
-              queue.push([nil, reply])
+              # params contains the method return values (first is the Hash)
+              queue.push([nil, params.first])
             end
           end
         end
@@ -112,19 +119,24 @@ module RBLE
 
       # Perform the actual async introspection
       #
+      # Uses connection.introspect_data with a block to avoid triggering
+      # synchronous introspection when accessing proxy interfaces.
+      #
       # @param path [String] D-Bus object path
       # @param timeout [Numeric] Timeout in seconds
       # @return [DBus::ProxyObject] Introspected proxy object
       def perform_async_introspect(path, timeout:)
-        proxy = @service.object(path)
-        introspectable = proxy[INTROSPECTABLE_INTERFACE]
+        # Create proxy without triggering auto-introspection
+        proxy = service.object(path)
 
-        xml = async_call('Introspect', timeout: timeout) do |queue, _request_id|
-          introspectable.Introspect do |reply|
-            if reply.is_a?(DBus::Error)
-              queue.push([reply, nil])
+        # Use async_call with direct introspect_data call (supports async via block)
+        xml = async_call('Introspect', timeout: timeout) do |queue, _request_id, cancelled|
+          service.connection.introspect_data(service.name, path) do |xml_result|
+            next if cancelled[0]  # Discard late callback
+            if xml_result.is_a?(DBus::Error)
+              queue.push([xml_result, nil])
             else
-              queue.push([nil, reply])
+              queue.push([nil, xml_result])
             end
           end
         end

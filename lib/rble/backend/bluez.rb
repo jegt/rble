@@ -18,6 +18,7 @@ module RBLE
 
         # Connection tracking
         @connected_devices = {}  # device_path => BlueZ::Device
+        @device_sessions = {}    # device_path => DBusSession (for async operations)
         @device_services = {}    # device_path => [Service, ...]
 
         # Subscription tracking for notifications
@@ -53,16 +54,17 @@ module RBLE
           @scan_session = RBLE::BlueZ::DBusSession.new
           @scan_session.connect
 
-          # Setup adapter and signal handlers
+          # Start event loop FIRST - async operations need it running
+          # to process D-Bus callbacks
+          @scan_session.start_event_loop
+
+          # Setup adapter and signal handlers (uses async introspection)
           @scan_adapter_path = setup_adapter_for_scan(@scan_session, adapter)
           setup_scan_signal_handlers(@scan_session)
           start_discovery_on_session(@scan_session, service_uuids: service_uuids, allow_duplicates: allow_duplicates)
 
           # Process existing devices (already discovered before scan started)
           process_existing_devices_from_session(@scan_session)
-
-          # Start event processing on the scan session
-          @scan_session.start_event_loop
         rescue StandardError
           stop_scan_cleanup
           raise
@@ -143,55 +145,40 @@ module RBLE
           raise AlreadyConnectedError if @connected_devices.key?(device_path)
         end
 
-        # Create temporary D-Bus connection for the connect operation
-        # This connection will be closed after connect completes
-        conn = create_temporary_connection
-        begin
-          device = RBLE::BlueZ::Device.new(conn, device_path)
-        rescue DBus::Error => e
-          conn.disconnect
-          if e.name == 'org.freedesktop.DBus.Error.UnknownObject'
-            address = extract_address_from_path(device_path)
-            raise DeviceNotFoundError.new(address)
-          end
-          raise ConnectionError, "Failed to connect: #{e.message}"
-        end
-
-        # Check if already connected at BlueZ level
-        if device.connected?
-          @state_mutex.synchronize { @connected_devices[device_path] = device }
-          conn.disconnect # Clean up temporary connection
-          return true
-        end
-
-        # Setup event loop for connection state tracking
-        event_loop = setup_connection_event_loop(conn, device_path)
+        # Create DBusSession for async operations
+        session = RBLE::BlueZ::DBusSession.new
+        session.connect
+        session.start_event_loop
 
         begin
-          # Initiate connection (async D-Bus call)
-          device.connect
+          # Use async_connect which handles everything without deadlock
+          session.async_connect(device_path, wait_for_services: true, timeout: timeout)
 
-          # Wait for Connected = true via PropertiesChanged
-          wait_for_property(event_loop, device_path, 'Connected', true, timeout)
+          # Create Device from session for later operations
+          device = RBLE::BlueZ::Device.new_from_session(session, device_path)
 
           # Store connected device (thread-safe)
-          @state_mutex.synchronize { @connected_devices[device_path] = device }
+          @state_mutex.synchronize do
+            @connected_devices[device_path] = device
+            @device_sessions[device_path] = session
+          end
           true
-        rescue ConnectionTimeoutError
-          # Cleanup on timeout
-          cleanup_connection_event_loop(event_loop)
-          raise
+        rescue RBLE::TimeoutError => e
+          session.stop_event_loop
+          session.disconnect
+          raise ConnectionTimeoutError.new(timeout)
         rescue DBus::Error => e
-          cleanup_connection_event_loop(event_loop)
+          session.stop_event_loop
+          session.disconnect
           if e.name == 'org.freedesktop.DBus.Error.UnknownObject'
             address = extract_address_from_path(device_path)
             raise DeviceNotFoundError.new(address)
           end
           raise ConnectionError, "Failed to connect: #{e.message}"
-        ensure
-          # Stop the event loop and close temporary connection
-          cleanup_connection_event_loop(event_loop)
-          conn&.disconnect
+        rescue => e
+          session.stop_event_loop
+          session.disconnect
+          raise
         end
       end
 
@@ -199,10 +186,11 @@ module RBLE
       # @param device_path [String] D-Bus device path
       # @return [void]
       def disconnect_device(device_path)
-        device = @state_mutex.synchronize do
+        device, session = @state_mutex.synchronize do
           dev = @connected_devices.delete(device_path)
+          sess = @device_sessions.delete(device_path)
           @device_services.delete(device_path)
-          dev
+          [dev, sess]
         end
         return unless device
 
@@ -210,8 +198,15 @@ module RBLE
         unregister_connection(device_path)
 
         begin
-          # Disconnect (no need to wait for confirmation - fire and forget)
-          device.disconnect
+          # Use async disconnect if session available
+          if session
+            session.async_disconnect(device_path, timeout: 5) rescue nil
+            session.stop_event_loop rescue nil
+            session.disconnect rescue nil
+          else
+            # Fallback to sync disconnect (legacy path)
+            device.disconnect rescue nil
+          end
         rescue DBus::Error
           # Ignore errors during cleanup - device may already be disconnected
         end
@@ -510,8 +505,8 @@ module RBLE
         session = connection.dbus_session
         return unless session # No session = no monitoring (e.g., macOS backend)
 
-        device_obj = session.object(device_path)
-        device_obj.introspect
+        # Use async_introspect to avoid deadlock (Connection's event loop is running)
+        device_obj = session.async_introspect(device_path, timeout: 5)
         props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
         # Subscribe to PropertiesChanged for this device
@@ -610,9 +605,8 @@ module RBLE
         adapter_path = if adapter_name
                          "/org/bluez/#{adapter_name}"
                        else
-                         # Find first available adapter
-                         om = session.object_manager
-                         managed = om.GetManagedObjects.first
+                         # Find first available adapter using async call (avoids deadlock)
+                         managed = session.async_get_managed_objects(timeout: 10)
                          adapter_entry = managed.find { |_path, ifaces| ifaces.key?(RBLE::BlueZ::ADAPTER_INTERFACE) }
                          raise AdapterNotFoundError unless adapter_entry
 
@@ -629,9 +623,8 @@ module RBLE
       # @param session [DBusSession] D-Bus session to use
       def setup_scan_signal_handlers(session)
         # Subscribe to InterfacesAdded for new device discovery
-        root = session.object('/')
-        root.introspect
-        object_manager = root[RBLE::BlueZ::OBJECT_MANAGER_INTERFACE]
+        # Use object_manager which returns pre-introspected root (no sync call)
+        object_manager = session.object_manager
 
         object_manager.on_signal('InterfacesAdded') do |path, interfaces|
           # Capture session to prevent race with cleanup setting it to nil
@@ -656,8 +649,8 @@ module RBLE
       # @param session [DBusSession] D-Bus session to use
       # @param device_path [String] Device path to monitor
       def subscribe_to_device_properties_for_scan(session, device_path)
-        device_obj = session.object(device_path)
-        device_obj.introspect
+        # Use async_introspect to avoid deadlock (event loop is running)
+        device_obj = session.async_introspect(device_path, timeout: 5)
         props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
         props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
@@ -974,8 +967,8 @@ module RBLE
       # @raise [ConnectionTimeoutError] if timeout exceeded
       def wait_for_property_on_session(session, device_path, property, expected_value, timeout)
         # Subscribe to PropertiesChanged on the device
-        device_obj = session.object(device_path)
-        device_obj.introspect
+        # Use async_introspect to avoid deadlock (Connection's event loop is running)
+        device_obj = session.async_introspect(device_path, timeout: 5)
         props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
         props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|

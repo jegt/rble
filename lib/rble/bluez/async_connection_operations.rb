@@ -56,12 +56,12 @@ module RBLE
         device_iface = proxy[DEVICE_INTERFACE]
         props_iface = proxy[PROPERTIES_INTERFACE]
 
-        # Idempotent: check if already connected
-        connected = props_iface.Get(DEVICE_INTERFACE, 'Connected').first
+        # Idempotent: check if already connected (use async to avoid deadlock)
+        connected = async_get_property(device_path, DEVICE_INTERFACE, 'Connected', timeout: timeout)
         if connected
           # If waiting for services and not resolved, wait
           if wait_for_services
-            services_resolved = props_iface.Get(DEVICE_INTERFACE, 'ServicesResolved').first
+            services_resolved = async_get_property(device_path, DEVICE_INTERFACE, 'ServicesResolved', timeout: timeout)
             unless services_resolved
               wait_for_services_resolved(props_iface, timeout: timeout)
             end
@@ -83,8 +83,9 @@ module RBLE
 
         begin
           # Call Connect asynchronously
-          async_call("Connect(#{address})", timeout: timeout) do |queue, _request_id|
+          async_call("Connect(#{address})", timeout: timeout) do |queue, _request_id, cancelled|
             device_iface.Connect do |reply|
+              next if cancelled[0]  # Discard late callback
               if reply.is_a?(DBus::Error)
                 queue.push([reply, nil])
               else
@@ -96,7 +97,8 @@ module RBLE
           # Wait for ServicesResolved if requested
           if wait_for_services && services_queue
             # Check if already resolved (race condition protection)
-            services_resolved = props_iface.Get(DEVICE_INTERFACE, 'ServicesResolved').first
+            # Use async_get_property to avoid deadlock
+            services_resolved = async_get_property(device_path, DEVICE_INTERFACE, 'ServicesResolved', timeout: timeout)
             unless services_resolved
               result = services_queue.pop(timeout: timeout)
               raise TimeoutError.new('ServicesResolved', timeout) if result.nil?
@@ -123,14 +125,14 @@ module RBLE
 
         proxy = async_introspect(device_path, timeout: timeout)
         device_iface = proxy[DEVICE_INTERFACE]
-        props_iface = proxy[PROPERTIES_INTERFACE]
 
-        # Idempotent: check if not connected
-        connected = props_iface.Get(DEVICE_INTERFACE, 'Connected').first
+        # Idempotent: check if not connected (use async to avoid deadlock)
+        connected = async_get_property(device_path, DEVICE_INTERFACE, 'Connected', timeout: timeout)
         return true unless connected
 
-        async_call("Disconnect(#{address})", timeout: timeout) do |queue, _request_id|
+        async_call("Disconnect(#{address})", timeout: timeout) do |queue, _request_id, cancelled|
           device_iface.Disconnect do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
@@ -161,10 +163,9 @@ module RBLE
       def async_start_discovery(adapter_path, filter: {}, timeout: DEFAULT_DISCOVERY_TIMEOUT)
         proxy = async_introspect(adapter_path, timeout: timeout)
         adapter_iface = proxy[ADAPTER_INTERFACE]
-        props_iface = proxy[PROPERTIES_INTERFACE]
 
-        # Idempotent: check if already discovering
-        discovering = props_iface.Get(ADAPTER_INTERFACE, 'Discovering').first
+        # Idempotent: check if already discovering (use async to avoid deadlock)
+        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: timeout)
         return true if discovering
 
         # Set discovery filter first if any options provided
@@ -172,8 +173,9 @@ module RBLE
           async_set_discovery_filter(adapter_path, adapter_iface, filter, timeout: timeout)
         end
 
-        async_call("StartDiscovery(#{adapter_path})", timeout: timeout) do |queue, _request_id|
+        async_call("StartDiscovery(#{adapter_path})", timeout: timeout) do |queue, _request_id, cancelled|
           adapter_iface.StartDiscovery do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
@@ -196,14 +198,14 @@ module RBLE
       def async_stop_discovery(adapter_path, timeout: DEFAULT_DISCOVERY_TIMEOUT)
         proxy = async_introspect(adapter_path, timeout: timeout)
         adapter_iface = proxy[ADAPTER_INTERFACE]
-        props_iface = proxy[PROPERTIES_INTERFACE]
 
-        # Idempotent: check if not discovering
-        discovering = props_iface.Get(ADAPTER_INTERFACE, 'Discovering').first
+        # Idempotent: check if not discovering (use async to avoid deadlock)
+        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: timeout)
         return true unless discovering
 
-        async_call("StopDiscovery(#{adapter_path})", timeout: timeout) do |queue, _request_id|
+        async_call("StopDiscovery(#{adapter_path})", timeout: timeout) do |queue, _request_id, cancelled|
           adapter_iface.StopDiscovery do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
@@ -229,18 +231,21 @@ module RBLE
         proxy = async_introspect(object_path, timeout: timeout)
         props_iface = proxy[PROPERTIES_INTERFACE]
 
-        result = async_call("Get(#{interface}.#{property})", timeout: timeout) do |queue, _request_id|
+        result = async_call("Get(#{interface}.#{property})", timeout: timeout) do |queue, _request_id, cancelled|
           props_iface.Get(interface, property) do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
-              queue.push([nil, reply])
+              # Extract params from DBus::Message - Get returns [Variant]
+              params = reply.respond_to?(:params) ? reply.params : [reply]
+              queue.push([nil, params.first])
             end
           end
         end
 
-        # D-Bus Properties.Get returns [value]
-        result&.first
+        # D-Bus Properties.Get returns value (already extracted from params)
+        result
       rescue DBus::Error => e
         raise TimeoutError.new("Get #{interface}.#{property}", timeout) if e.message.include?('timeout')
         raise e
@@ -262,8 +267,9 @@ module RBLE
         # Wrap value in DBus::Data::Variant with inferred type
         variant_value = create_variant(value)
 
-        async_call("Set(#{interface}.#{property})", timeout: timeout) do |queue, _request_id|
+        async_call("Set(#{interface}.#{property})", timeout: timeout) do |queue, _request_id, cancelled|
           props_iface.Set(interface, property, variant_value) do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
@@ -343,8 +349,9 @@ module RBLE
           )
         end
 
-        async_call("SetDiscoveryFilter(#{adapter_path})", timeout: timeout) do |queue, _request_id|
+        async_call("SetDiscoveryFilter(#{adapter_path})", timeout: timeout) do |queue, _request_id, cancelled|
           adapter_iface.SetDiscoveryFilter(filter) do |reply|
+            next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
               queue.push([reply, nil])
             else
