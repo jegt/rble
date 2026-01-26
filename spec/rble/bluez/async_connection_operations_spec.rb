@@ -39,14 +39,28 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
   end
 
   describe '#async_connect' do
+    # Default property values - can be overridden in tests
+    let(:connected_value) { false }
+    let(:services_resolved_value) { false }
+
     before do
-      # Default: not connected, services not resolved
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Device1', 'Connected')
-        .and_return([false])
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Device1', 'ServicesResolved')
-        .and_return([false])
+      # Use callback pattern for async_get_property compatibility
+      # Handle both sync (no block) and async (with block) calls
+      allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+        value = case [interface, property]
+                when ['org.bluez.Device1', 'Connected'] then connected_value
+                when ['org.bluez.Device1', 'ServicesResolved'] then services_resolved_value
+                else nil
+                end
+        if block
+          # Async call: create a mock reply message with params
+          mock_reply = double('DBus::Message', params: [value])
+          block.call(mock_reply)
+        else
+          # Sync call: return array
+          [value]
+        end
+      end
       allow(mock_props_iface).to receive(:on_signal).and_return(nil)
     end
 
@@ -72,15 +86,31 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       expect(subject_instance).to receive(:async_introspect)
         .with(device_path, timeout: 30)
         .and_return(mock_proxy)
+        .at_least(:once)
 
       allow(mock_device_iface).to receive(:Connect) do |&block|
         block.call(nil)
       end
 
-      # Already services resolved
+      # Already connected so skips the Connect call
       allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Device1', 'ServicesResolved')
-        .and_return([true])
+        .with('org.bluez.Device1', 'Connected') do |*_args, &block|
+          if block
+            mock_reply = double('DBus::Message', params: [true])
+            block.call(mock_reply)
+          else
+            [true]
+          end
+        end
+      allow(mock_props_iface).to receive(:Get)
+        .with('org.bluez.Device1', 'ServicesResolved') do |*_args, &block|
+          if block
+            mock_reply = double('DBus::Message', params: [true])
+            block.call(mock_reply)
+          else
+            [true]
+          end
+        end
 
       subject_instance.async_connect(device_path)
     end
@@ -90,10 +120,21 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
         block.call(nil)
       end
 
-      # Start with services not resolved
-      resolved_value = [false]
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Device1', 'ServicesResolved') { resolved_value }
+      # Start with services not resolved, will become resolved later
+      services_resolved = false
+      allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+        value = case [interface, property]
+                when ['org.bluez.Device1', 'Connected'] then false  # Not connected yet
+                when ['org.bluez.Device1', 'ServicesResolved'] then services_resolved
+                else nil
+                end
+        if block
+          mock_reply = double('DBus::Message', params: [value])
+          block.call(mock_reply)
+        else
+          [value]
+        end
+      end
 
       # Signal handler will be set up
       signal_block = nil
@@ -111,7 +152,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
 
       # Simulate services resolved signal
       if signal_block
-        resolved_value[0] = true
+        services_resolved = true
         signal_block.call('org.bluez.Device1', { 'ServicesResolved' => true }, [])
       end
 
@@ -132,12 +173,20 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
     end
 
     it 'is idempotent: returns true if already connected' do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Device1', 'Connected')
-        .and_return([true])
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Device1', 'ServicesResolved')
-        .and_return([true])
+      # Already connected and services resolved
+      allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+        value = case [interface, property]
+                when ['org.bluez.Device1', 'Connected'] then true
+                when ['org.bluez.Device1', 'ServicesResolved'] then true
+                else nil
+                end
+        if block
+          mock_reply = double('DBus::Message', params: [value])
+          block.call(mock_reply)
+        else
+          [value]
+        end
+      end
 
       # Connect should NOT be called
       expect(mock_device_iface).not_to receive(:Connect)
