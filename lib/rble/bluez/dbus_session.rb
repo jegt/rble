@@ -38,6 +38,9 @@ module RBLE
         @event_loop = nil
         @mutex = Mutex.new
         @introspection_cache = {}
+        @registered_handlers = []  # Array of [proxy_iface, signal_name] tuples
+        @pending_queues = []       # Array of Thread::Queue for pending async calls
+        @closed = false            # Track closed state for idempotent close
       end
 
       # Get the D-Bus service
@@ -45,6 +48,22 @@ module RBLE
       # @return [DBus::Service, nil]
       def service
         @mutex.synchronize { @connection&.service }
+      end
+
+      # Register a signal handler with tracking for cleanup
+      # @param proxy_iface [DBus::ProxyObjectInterface] The interface
+      # @param signal_name [String] Signal name (e.g., 'PropertiesChanged')
+      # @yield Signal handler block
+      # @return [void]
+      def register_signal_handler(proxy_iface, signal_name, &block)
+        proxy_iface.on_signal(signal_name, &block)
+        @registered_handlers << [proxy_iface, signal_name]
+      end
+
+      # Check if session is closed
+      # @return [Boolean]
+      def closed?
+        @mutex.synchronize { @closed }
       end
 
       # Connect to the D-Bus system bus
@@ -86,26 +105,41 @@ module RBLE
         end
       end
 
-      # Disconnect from D-Bus
-      # Stops the event loop (if running) and closes the D-Bus connection
-      # After disconnect, the session cannot be reused - create a new session instead
+      # Close the session (idempotent)
+      # Stops event loop, unregisters signal handlers, closes connection
+      # Safe teardown order: notify pending -> stop loop -> unregister handlers -> close connection
       # @return [void]
-      def disconnect
+      def close
         @mutex.synchronize do
-          # Stop event loop first to prevent signal handlers from firing
+          return if @closed
+          @closed = true
+
+          # Notify pending async callers they won't get results
+          @pending_queues.each { |q| q.push([:session_closed, nil]) }
+          @pending_queues.clear
+
+          # Stop event loop FIRST (critical - prevents RemoveMatch deadlock)
           @event_loop&.stop(timeout: 1)
           @event_loop = nil
 
-          # Close D-Bus connection
+          # NOW safe to unregister signal handlers (no Main loop = no deadlock)
+          unregister_signal_handlers
+
+          # Close D-Bus connection last
           @connection&.disconnect
           @connection = nil
+
+          RBLE.logger&.debug('[RBLE] Session closed')
         end
       end
+
+      # Backward compatibility alias
+      alias disconnect close
 
       # Check if connected to D-Bus
       # @return [Boolean]
       def connected?
-        @mutex.synchronize { @connection&.connected? || false }
+        @mutex.synchronize { !@closed && (@connection&.connected? || false) }
       end
 
       # Check if event loop is running
@@ -186,7 +220,7 @@ module RBLE
         root = @connection.root_object
         om = root[OBJECT_MANAGER_INTERFACE]
 
-        om.on_signal('InterfacesRemoved') do |path, _interfaces|
+        register_signal_handler(om, 'InterfacesRemoved') do |path, _interfaces|
           # Clear the removed path
           clear_introspection(path)
 
@@ -195,6 +229,19 @@ module RBLE
             clear_introspection(cached_path) if cached_path.start_with?("#{path}/")
           end
         end
+      end
+
+      # Unregister all tracked signal handlers
+      # Must be called AFTER event loop is stopped to avoid RemoveMatch deadlock
+      def unregister_signal_handlers
+        @registered_handlers.each do |proxy_iface, signal_name|
+          begin
+            proxy_iface.on_signal(signal_name)  # No block = unregister
+          rescue StandardError => e
+            RBLE.logger&.debug("[RBLE] Signal cleanup ignored: #{e.message}")
+          end
+        end
+        @registered_handlers.clear
       end
     end
   end
