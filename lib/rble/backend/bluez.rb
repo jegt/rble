@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'timeout'
 require_relative '../bluez'
 
 module RBLE
@@ -1056,39 +1055,6 @@ module RBLE
         services
       end
 
-      # Wrap D-Bus operation with timeout and automatic InProgress retry
-      # @param operation_name [String] Name for logging/errors
-      # @param timeout [Numeric] Total timeout in seconds (includes retry delays)
-      # @param max_attempts [Integer] Max retry attempts for InProgress (default: 3)
-      # @yield Block containing D-Bus operation
-      # @return Result of block
-      # @raise [TimeoutError] if total timeout exceeded
-      # @raise [DBus::Error] if non-InProgress error occurs
-      def with_timeout_and_retry(operation_name, timeout:, max_attempts: 3)
-        deadline = Time.now + timeout
-        attempts = 0
-
-        begin
-          remaining = deadline - Time.now
-          raise TimeoutError.new(operation_name, timeout) if remaining <= 0
-
-          Timeout.timeout(remaining, TimeoutError.new(operation_name, timeout)) do
-            yield
-          end
-        rescue DBus::Error => e
-          if e.name == 'org.bluez.Error.InProgress' && attempts < max_attempts
-            attempts += 1
-            remaining = deadline - Time.now
-            if remaining > 0
-              delay = [0.1 * (2**(attempts - 1)), remaining].min
-              RBLE.logger&.info("[RBLE] Retry #{attempts}/#{max_attempts}: InProgress on #{operation_name}")
-              sleep(delay)
-              retry
-            end
-          end
-          raise
-        end
-      end
     end
   end
 end
