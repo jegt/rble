@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'async_call'
+require_relative 'async_introspection'
 
 module RBLE
   module BlueZ
@@ -25,12 +26,21 @@ module RBLE
     #
     class DBusSession
       include AsyncCall
+      include AsyncIntrospection
 
       # Create a new DBusSession (not yet connected)
       def initialize
         @connection = nil
         @event_loop = nil
         @mutex = Mutex.new
+        @introspection_cache = {}
+      end
+
+      # Get the D-Bus service
+      # Required by AsyncIntrospection module
+      # @return [DBus::Service, nil]
+      def service
+        @mutex.synchronize { @connection&.service }
       end
 
       # Connect to the D-Bus system bus
