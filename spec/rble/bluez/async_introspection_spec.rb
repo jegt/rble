@@ -20,13 +20,12 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     end
   end
 
-  let(:mock_service) { double("DBus::Service") }
+  let(:mock_connection) { double("DBus::Connection") }
+  let(:mock_service) { double("DBus::Service", connection: mock_connection, name: "org.bluez") }
   let(:instance) { test_class.new(mock_service) }
 
   # Mock D-Bus objects - use plain double because D-Bus methods are dynamic
   let(:mock_proxy) { double("DBus::ProxyObject") }
-  let(:mock_introspectable) { double("DBus::ProxyObjectInterface") }
-  let(:mock_object_manager) { double("DBus::ProxyObjectInterface") }
 
   let(:introspection_xml) do
     <<~XML
@@ -52,11 +51,10 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     context "cache miss (first call)" do
       before do
         allow(mock_service).to receive(:object).with(device_path).and_return(mock_proxy)
-        allow(mock_proxy).to receive(:[]).with("org.freedesktop.DBus.Introspectable").and_return(mock_introspectable)
       end
 
-      it "calls D-Bus Introspect method asynchronously" do
-        expect(mock_introspectable).to receive(:Introspect) do |&callback|
+      it "calls D-Bus introspect_data method asynchronously" do
+        expect(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&callback|
           # Simulate async callback with introspection XML
           callback.call(introspection_xml)
         end
@@ -68,7 +66,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
       end
 
       it "parses introspection XML into ProxyObject" do
-        allow(mock_introspectable).to receive(:Introspect) do |&callback|
+        allow(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&callback|
           callback.call(introspection_xml)
         end
 
@@ -78,7 +76,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
       end
 
       it "caches the introspected ProxyObject" do
-        allow(mock_introspectable).to receive(:Introspect) do |&callback|
+        allow(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&callback|
           callback.call(introspection_xml)
         end
         allow(DBus::ProxyObjectFactory).to receive(:introspect_into).with(mock_proxy, introspection_xml)
@@ -108,11 +106,10 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     context "timeout" do
       before do
         allow(mock_service).to receive(:object).with(device_path).and_return(mock_proxy)
-        allow(mock_proxy).to receive(:[]).with("org.freedesktop.DBus.Introspectable").and_return(mock_introspectable)
       end
 
       it "raises TimeoutError when timeout exceeded" do
-        allow(mock_introspectable).to receive(:Introspect) do |&_callback|
+        allow(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&_callback|
           # Don't call callback - simulate timeout
           sleep 0.2
         end
@@ -129,13 +126,12 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     context "D-Bus error" do
       before do
         allow(mock_service).to receive(:object).with(device_path).and_return(mock_proxy)
-        allow(mock_proxy).to receive(:[]).with("org.freedesktop.DBus.Introspectable").and_return(mock_introspectable)
       end
 
       it "propagates DBus::Error from D-Bus" do
         dbus_error = DBus::Error.new("org.freedesktop.DBus.Error.UnknownObject: No such object")
 
-        allow(mock_introspectable).to receive(:Introspect) do |&callback|
+        allow(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&callback|
           callback.call(dbus_error)
         end
 
@@ -157,9 +153,6 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
   end
 
   describe "#async_get_managed_objects" do
-    let(:root_path) { "/" }
-    let(:mock_root_proxy) { double("DBus::ProxyObject") }
-
     let(:managed_objects_result) do
       {
         "/org/bluez/hci0" => {
@@ -172,13 +165,17 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     end
 
     before do
-      allow(mock_service).to receive(:object).with(root_path).and_return(mock_root_proxy)
-      allow(mock_root_proxy).to receive(:[]).with("org.freedesktop.DBus.ObjectManager").and_return(mock_object_manager)
+      allow(mock_connection).to receive(:unique_name).and_return(":1.123")
     end
 
-    it "calls ObjectManager.GetManagedObjects asynchronously" do
-      expect(mock_object_manager).to receive(:GetManagedObjects) do |&callback|
-        callback.call(managed_objects_result)
+    it "calls send_sync_or_async for GetManagedObjects" do
+      expect(mock_connection).to receive(:send_sync_or_async) do |msg, &callback|
+        expect(msg.interface).to eq("org.freedesktop.DBus.ObjectManager")
+        expect(msg.member).to eq("GetManagedObjects")
+        expect(msg.path).to eq("/")
+        # Simulate successful async response - reply is the first argument, params follow
+        mock_reply = double("DBus::Message")
+        callback.call(mock_reply, managed_objects_result)
       end
 
       result = instance.async_get_managed_objects(timeout: 1)
@@ -186,8 +183,9 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     end
 
     it "returns hash of path => interfaces" do
-      allow(mock_object_manager).to receive(:GetManagedObjects) do |&callback|
-        callback.call(managed_objects_result)
+      allow(mock_connection).to receive(:send_sync_or_async) do |_msg, &callback|
+        mock_reply = double("DBus::Message")
+        callback.call(mock_reply, managed_objects_result)
       end
 
       result = instance.async_get_managed_objects(timeout: 1)
@@ -198,8 +196,9 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     end
 
     it "uses longer default timeout (10 seconds)" do
-      allow(mock_object_manager).to receive(:GetManagedObjects) do |&callback|
-        callback.call(managed_objects_result)
+      allow(mock_connection).to receive(:send_sync_or_async) do |_msg, &callback|
+        mock_reply = double("DBus::Message")
+        callback.call(mock_reply, managed_objects_result)
       end
 
       # Method should accept call without timeout parameter (uses 10s default)
@@ -207,7 +206,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     end
 
     it "raises TimeoutError when timeout exceeded" do
-      allow(mock_object_manager).to receive(:GetManagedObjects) do |&_callback|
+      allow(mock_connection).to receive(:send_sync_or_async) do |_msg, &_callback|
         # Don't call callback - simulate timeout
         sleep 0.2
       end
@@ -223,7 +222,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     it "propagates DBus::Error from D-Bus" do
       dbus_error = DBus::Error.new("org.freedesktop.DBus.Error.Failed: Internal error")
 
-      allow(mock_object_manager).to receive(:GetManagedObjects) do |&callback|
+      allow(mock_connection).to receive(:send_sync_or_async) do |_msg, &callback|
         callback.call(dbus_error)
       end
 
@@ -237,7 +236,6 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     let(:device_path) { "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF" }
     let(:old_proxy) { double("DBus::ProxyObject") }
     let(:new_proxy) { double("DBus::ProxyObject") }
-    let(:new_introspectable) { double("DBus::ProxyObjectInterface") }
 
     before do
       # Pre-populate cache with old proxy
@@ -246,8 +244,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
 
     it "clears cache entry before re-introspecting" do
       allow(mock_service).to receive(:object).with(device_path).and_return(new_proxy)
-      allow(new_proxy).to receive(:[]).with("org.freedesktop.DBus.Introspectable").and_return(new_introspectable)
-      allow(new_introspectable).to receive(:Introspect) do |&callback|
+      allow(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&callback|
         callback.call(introspection_xml)
       end
       allow(DBus::ProxyObjectFactory).to receive(:introspect_into)
@@ -260,8 +257,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
 
     it "returns fresh ProxyObject" do
       allow(mock_service).to receive(:object).with(device_path).and_return(new_proxy)
-      allow(new_proxy).to receive(:[]).with("org.freedesktop.DBus.Introspectable").and_return(new_introspectable)
-      allow(new_introspectable).to receive(:Introspect) do |&callback|
+      allow(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&callback|
         callback.call(introspection_xml)
       end
       allow(DBus::ProxyObjectFactory).to receive(:introspect_into)
@@ -272,8 +268,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
 
     it "updates cache with new result" do
       allow(mock_service).to receive(:object).with(device_path).and_return(new_proxy)
-      allow(new_proxy).to receive(:[]).with("org.freedesktop.DBus.Introspectable").and_return(new_introspectable)
-      allow(new_introspectable).to receive(:Introspect) do |&callback|
+      allow(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&callback|
         callback.call(introspection_xml)
       end
       allow(DBus::ProxyObjectFactory).to receive(:introspect_into)
@@ -327,8 +322,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
       RSpec::Mocks.space.proxy_for(RBLE).reset
       allow(RBLE).to receive(:logger).and_return(logger)
       allow(mock_service).to receive(:object).with(device_path).and_return(mock_proxy)
-      allow(mock_proxy).to receive(:[]).with("org.freedesktop.DBus.Introspectable").and_return(mock_introspectable)
-      allow(mock_introspectable).to receive(:Introspect) do |&callback|
+      allow(mock_connection).to receive(:introspect_data).with("org.bluez", device_path) do |&callback|
         callback.call(introspection_xml)
       end
       allow(DBus::ProxyObjectFactory).to receive(:introspect_into)

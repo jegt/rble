@@ -2,6 +2,7 @@
 
 require 'spec_helper'
 require 'rble/bluez/async_gatt_operations'
+require 'rble/bluez/async_connection_operations'
 
 RSpec.describe RBLE::BlueZ::AsyncGattOperations do
   # Test helper class that includes all necessary modules
@@ -9,6 +10,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
     Class.new do
       include RBLE::BlueZ::AsyncCall
       include RBLE::BlueZ::AsyncIntrospection
+      include RBLE::BlueZ::AsyncConnectionOperations
       include RBLE::BlueZ::AsyncGattOperations
 
       attr_accessor :service, :introspection_cache
@@ -29,6 +31,11 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
   let(:char_path) { '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/service0010/char0011' }
   let(:test_uuid) { '00002a00-0000-1000-8000-00805f9b34fb' }
 
+  # Helper to create mock DBus::Message with params
+  def mock_dbus_reply(*params)
+    double('DBus::Message', params: params)
+  end
+
   before do
     # Default mock setup - override in specific tests
     allow(subject_instance).to receive(:async_introspect).and_return(mock_proxy)
@@ -38,10 +45,9 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
 
   describe '#async_read_value' do
     it 'returns binary string on success' do
-      # Simulate successful ReadValue
+      # Simulate successful ReadValue - D-Bus returns array of bytes
       allow(mock_char_iface).to receive(:ReadValue) do |_options, &block|
-        # D-Bus returns array of bytes
-        block.call([[72, 101, 108, 108, 111]]) # "Hello" in bytes
+        block.call(mock_dbus_reply([72, 101, 108, 108, 111])) # "Hello" in bytes
       end
 
       result = subject_instance.async_read_value(char_path, timeout: 1)
@@ -53,7 +59,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
     it 'uses async_introspect to get cached proxy' do
       expect(subject_instance).to receive(:async_introspect).with(char_path, timeout: 5).and_return(mock_proxy)
       allow(mock_char_iface).to receive(:ReadValue) do |_options, &block|
-        block.call([[65]]) # "A"
+        block.call(mock_dbus_reply([65])) # "A"
       end
 
       subject_instance.async_read_value(char_path)
@@ -65,7 +71,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
         # The async_call implementation will timeout
         Thread.new do
           sleep 2
-          block.call([[65]])
+          block.call(mock_dbus_reply([65]))
         end
       end
 
@@ -116,7 +122,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
       captured_options = nil
       allow(mock_char_iface).to receive(:WriteValue) do |bytes, options, &block|
         captured_options = options
-        block.call(nil)
+        block.call(mock_dbus_reply(nil))
       end
 
       subject_instance.async_write_value(char_path, test_bytes)
@@ -129,7 +135,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
       captured_options = nil
       allow(mock_char_iface).to receive(:WriteValue) do |bytes, options, &block|
         captured_options = options
-        block.call(nil)
+        block.call(mock_dbus_reply(nil))
       end
 
       subject_instance.async_write_value(char_path, test_bytes, response: false)
@@ -143,7 +149,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
         .and_return(mock_proxy)
 
       allow(mock_char_iface).to receive(:WriteValue) do |_bytes, _options, &block|
-        block.call(nil)
+        block.call(mock_dbus_reply(nil))
       end
 
       subject_instance.async_write_value(char_path, test_bytes, response: false)
@@ -169,7 +175,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
       allow(mock_char_iface).to receive(:WriteValue) do |_bytes, _options, &block|
         Thread.new do
           sleep 2
-          block.call(nil)
+          block.call(mock_dbus_reply(nil))
         end
       end
 
@@ -182,18 +188,19 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
   describe '#async_start_notify' do
     before do
       # Default: has notify flag and not currently notifying
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.GattCharacteristic1', 'Flags')
-        .and_return([['notify', 'read']])
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.GattCharacteristic1', 'Notifying')
-        .and_return([false])
+      # Use allow_any_instance_of to match the async_get_property calls
+      allow(subject_instance).to receive(:async_get_property)
+        .with(char_path, 'org.bluez.GattCharacteristic1', 'Flags', timeout: anything)
+        .and_return(['notify', 'read'])
+      allow(subject_instance).to receive(:async_get_property)
+        .with(char_path, 'org.bluez.GattCharacteristic1', 'Notifying', timeout: anything)
+        .and_return(false)
     end
 
     it 'returns true if already notifying (idempotent)' do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.GattCharacteristic1', 'Notifying')
-        .and_return([true])
+      allow(subject_instance).to receive(:async_get_property)
+        .with(char_path, 'org.bluez.GattCharacteristic1', 'Notifying', timeout: anything)
+        .and_return(true)
 
       # StartNotify should NOT be called
       expect(mock_char_iface).not_to receive(:StartNotify)
@@ -204,7 +211,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
 
     it 'calls StartNotify when not notifying' do
       expect(mock_char_iface).to receive(:StartNotify) do |&block|
-        block.call(nil)
+        block.call(mock_dbus_reply(nil))
       end
 
       result = subject_instance.async_start_notify(char_path)
@@ -212,9 +219,9 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
     end
 
     it 'raises NotifyNotSupported if no notify/indicate flag' do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.GattCharacteristic1', 'Flags')
-        .and_return([['read', 'write']])
+      allow(subject_instance).to receive(:async_get_property)
+        .with(char_path, 'org.bluez.GattCharacteristic1', 'Flags', timeout: anything)
+        .and_return(['read', 'write'])
 
       expect {
         subject_instance.async_start_notify(char_path)
@@ -228,7 +235,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
       allow(mock_char_iface).to receive(:StartNotify) do |&block|
         Thread.new do
           sleep 2
-          block.call(nil)
+          block.call(mock_dbus_reply(nil))
         end
       end
 
@@ -241,7 +248,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
   describe '#async_stop_notify' do
     it 'calls StopNotify' do
       expect(mock_char_iface).to receive(:StopNotify) do |&block|
-        block.call(nil)
+        block.call(mock_dbus_reply(nil))
       end
 
       result = subject_instance.async_stop_notify(char_path)
@@ -252,7 +259,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
       allow(mock_char_iface).to receive(:StopNotify) do |&block|
         Thread.new do
           sleep 2
-          block.call(nil)
+          block.call(mock_dbus_reply(nil))
         end
       end
 

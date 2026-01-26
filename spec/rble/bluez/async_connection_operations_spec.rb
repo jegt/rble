@@ -264,10 +264,21 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
   end
 
   describe '#async_disconnect' do
+    # Helper to create async-compatible Get mock
+    def mock_get_connected(value)
+      allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+        return_value = (interface == 'org.bluez.Device1' && property == 'Connected') ? value : nil
+        if block
+          mock_reply = double('DBus::Message', params: [return_value])
+          block.call(mock_reply)
+        else
+          [return_value]
+        end
+      end
+    end
+
     before do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Device1', 'Connected')
-        .and_return([true])
+      mock_get_connected(true)
     end
 
     it 'returns true on successful disconnect' do
@@ -283,6 +294,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       expect(subject_instance).to receive(:async_introspect)
         .with(device_path, timeout: 5)
         .and_return(mock_proxy)
+        .at_least(:once)
 
       allow(mock_device_iface).to receive(:Disconnect) do |&block|
         block.call(nil)
@@ -292,9 +304,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
     end
 
     it 'is idempotent: returns true if not connected' do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Device1', 'Connected')
-        .and_return([false])
+      mock_get_connected(false)
 
       # Disconnect should NOT be called
       expect(mock_device_iface).not_to receive(:Disconnect)
@@ -318,10 +328,21 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
   end
 
   describe '#async_start_discovery' do
+    # Helper to create async-compatible Get mock for Discovering property
+    def mock_get_discovering(value)
+      allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+        return_value = (interface == 'org.bluez.Adapter1' && property == 'Discovering') ? value : nil
+        if block
+          mock_reply = double('DBus::Message', params: [return_value])
+          block.call(mock_reply)
+        else
+          [return_value]
+        end
+      end
+    end
+
     before do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Adapter1', 'Discovering')
-        .and_return([false])
+      mock_get_discovering(false)
     end
 
     it 'returns true on successful start' do
@@ -377,9 +398,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
     end
 
     it 'is idempotent: returns true if already discovering' do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Adapter1', 'Discovering')
-        .and_return([true])
+      mock_get_discovering(true)
 
       # StartDiscovery should NOT be called
       expect(mock_adapter_iface).not_to receive(:StartDiscovery)
@@ -418,10 +437,21 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
   end
 
   describe '#async_stop_discovery' do
+    # Helper to create async-compatible Get mock for Discovering property
+    def mock_get_discovering_stop(value)
+      allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+        return_value = (interface == 'org.bluez.Adapter1' && property == 'Discovering') ? value : nil
+        if block
+          mock_reply = double('DBus::Message', params: [return_value])
+          block.call(mock_reply)
+        else
+          [return_value]
+        end
+      end
+    end
+
     before do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Adapter1', 'Discovering')
-        .and_return([true])
+      mock_get_discovering_stop(true)
     end
 
     it 'returns true on successful stop' do
@@ -434,9 +464,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
     end
 
     it 'is idempotent: returns true if not discovering' do
-      allow(mock_props_iface).to receive(:Get)
-        .with('org.bluez.Adapter1', 'Discovering')
-        .and_return([false])
+      mock_get_discovering_stop(false)
 
       # StopDiscovery should NOT be called
       expect(mock_adapter_iface).not_to receive(:StopDiscovery)
@@ -450,7 +478,8 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
     it 'returns property value' do
       allow(mock_props_iface).to receive(:Get)
         .with('org.bluez.Device1', 'Connected') do |*_args, &block|
-          block.call([true])
+          mock_reply = double('DBus::Message', params: [true])
+          block.call(mock_reply)
         end
 
       result = subject_instance.async_get_property(
@@ -467,7 +496,8 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
         .and_return(mock_proxy)
 
       allow(mock_props_iface).to receive(:Get) do |*_args, &block|
-        block.call([true])
+        mock_reply = double('DBus::Message', params: [true])
+        block.call(mock_reply)
       end
 
       subject_instance.async_get_property(device_path, 'org.bluez.Device1', 'Connected')
@@ -476,7 +506,8 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
     it 'works for any interface.property combination' do
       allow(mock_props_iface).to receive(:Get)
         .with('org.bluez.Adapter1', 'Powered') do |*_args, &block|
-          block.call([true])
+          mock_reply = double('DBus::Message', params: [true])
+          block.call(mock_reply)
         end
 
       result = subject_instance.async_get_property(
@@ -491,7 +522,8 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       allow(mock_props_iface).to receive(:Get) do |*_args, &block|
         Thread.new do
           sleep 2
-          block.call([true])
+          mock_reply = double('DBus::Message', params: [true])
+          block.call(mock_reply)
         end
       end
 
@@ -551,9 +583,16 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
   describe 'error translation' do
     describe 'translate_connection_error' do
       before do
-        allow(mock_props_iface).to receive(:Get)
-          .with('org.bluez.Device1', 'Connected')
-          .and_return([false])
+        # Device not connected - async callback pattern
+        allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+          value = (interface == 'org.bluez.Device1' && property == 'Connected') ? false : nil
+          if block
+            mock_reply = double('DBus::Message', params: [value])
+            block.call(mock_reply)
+          else
+            [value]
+          end
+        end
       end
 
       it 'includes device address in error message' do
@@ -575,9 +614,16 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
 
     describe 'translate_discovery_error' do
       before do
-        allow(mock_props_iface).to receive(:Get)
-          .with('org.bluez.Adapter1', 'Discovering')
-          .and_return([false])
+        # Not discovering - async callback pattern
+        allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+          value = (interface == 'org.bluez.Adapter1' && property == 'Discovering') ? false : nil
+          if block
+            mock_reply = double('DBus::Message', params: [value])
+            block.call(mock_reply)
+          else
+            [value]
+          end
+        end
       end
 
       it 'raises ScanInProgressError for InProgress' do
@@ -595,9 +641,16 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       end
 
       it 'raises PermissionError for NotAuthorized' do
-        allow(mock_props_iface).to receive(:Get)
-          .with('org.bluez.Adapter1', 'Discovering')
-          .and_return([true])
+        # Override to be discovering - async callback pattern
+        allow(mock_props_iface).to receive(:Get) do |interface, property, &block|
+          value = (interface == 'org.bluez.Adapter1' && property == 'Discovering') ? true : nil
+          if block
+            mock_reply = double('DBus::Message', params: [value])
+            block.call(mock_reply)
+          else
+            [value]
+          end
+        end
 
         dbus_error = DBus::Error.new('org.bluez.Error.NotAuthorized')
         allow(dbus_error).to receive(:name).and_return('org.bluez.Error.NotAuthorized')
