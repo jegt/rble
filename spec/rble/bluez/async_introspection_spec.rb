@@ -20,13 +20,13 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     end
   end
 
-  let(:mock_service) { instance_double("DBus::Service") }
+  let(:mock_service) { double("DBus::Service") }
   let(:instance) { test_class.new(mock_service) }
 
-  # Mock D-Bus objects
-  let(:mock_proxy) { instance_double("DBus::ProxyObject") }
-  let(:mock_introspectable) { instance_double("DBus::ProxyObjectInterface") }
-  let(:mock_object_manager) { instance_double("DBus::ProxyObjectInterface") }
+  # Mock D-Bus objects - use plain double because D-Bus methods are dynamic
+  let(:mock_proxy) { double("DBus::ProxyObject") }
+  let(:mock_introspectable) { double("DBus::ProxyObjectInterface") }
+  let(:mock_object_manager) { double("DBus::ProxyObjectInterface") }
 
   let(:introspection_xml) do
     <<~XML
@@ -158,7 +158,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
 
   describe "#async_get_managed_objects" do
     let(:root_path) { "/" }
-    let(:mock_root_proxy) { instance_double("DBus::ProxyObject") }
+    let(:mock_root_proxy) { double("DBus::ProxyObject") }
 
     let(:managed_objects_result) do
       {
@@ -235,9 +235,9 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
 
   describe "#refresh_introspection" do
     let(:device_path) { "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF" }
-    let(:old_proxy) { instance_double("DBus::ProxyObject", name: "old") }
-    let(:new_proxy) { instance_double("DBus::ProxyObject", name: "new") }
-    let(:new_introspectable) { instance_double("DBus::ProxyObjectInterface") }
+    let(:old_proxy) { double("DBus::ProxyObject") }
+    let(:new_proxy) { double("DBus::ProxyObject") }
+    let(:new_introspectable) { double("DBus::ProxyObjectInterface") }
 
     before do
       # Pre-populate cache with old proxy
@@ -292,7 +292,7 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     before do
       instance.instance_variable_set(:@introspection_cache, {
         device_path => mock_proxy,
-        other_path => instance_double("DBus::ProxyObject")
+        other_path => double("DBus::ProxyObject")
       })
     end
 
@@ -322,14 +322,10 @@ RSpec.describe RBLE::BlueZ::AsyncIntrospection do
     let(:logger) { Logger.new(log_output) }
     let(:device_path) { "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF" }
 
-    around do |example|
-      original_logger = RBLE.logger
-      RBLE.logger = logger
-      example.run
-      RBLE.logger = original_logger
-    end
-
     before do
+      # Remove the global nil stub and set up actual logger
+      RSpec::Mocks.space.proxy_for(RBLE).reset
+      allow(RBLE).to receive(:logger).and_return(logger)
       allow(mock_service).to receive(:object).with(device_path).and_return(mock_proxy)
       allow(mock_proxy).to receive(:[]).with("org.freedesktop.DBus.Introspectable").and_return(mock_introspectable)
       allow(mock_introspectable).to receive(:Introspect) do |&callback|
