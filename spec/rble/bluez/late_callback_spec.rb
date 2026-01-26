@@ -130,13 +130,11 @@ RSpec.describe RBLE::BlueZ::AsyncCall, "late callback handling" do
 
   describe "late callback pattern demonstration" do
     it "shows how callback can check cancelled flag before pushing" do
-      result_queue = nil
       cancelled_flag = nil
       push_attempted = false
 
       begin
         instance.async_call("DemoOp", timeout: 0.05) do |queue, _request_id, cancelled|
-          result_queue = queue
           cancelled_flag = cancelled
 
           # Simulate async D-Bus callback that arrives late
