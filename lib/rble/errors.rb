@@ -95,6 +95,33 @@ module RBLE
     end
   end
 
+  # Raised when connection attempt fails (out of range, device unavailable, etc.)
+  class ConnectionFailed < ConnectionError
+    attr_reader :address, :reason
+
+    def initialize(address, reason = nil)
+      @address = address
+      @reason = reason
+      msg = "Connection to #{address} failed"
+      msg = "#{msg}: #{reason}" if reason
+      super(msg)
+    end
+  end
+
+  # Raised when device disconnects during an operation
+  class DeviceDisconnected < ConnectionError
+    attr_reader :address, :operation
+
+    def initialize(address = nil, operation = nil)
+      @address = address
+      @operation = operation
+      msg = 'Device disconnected'
+      msg = "#{msg} (#{address})" if address
+      msg = "#{msg} during #{operation}" if operation
+      super(msg)
+    end
+  end
+
   # Base class for service discovery errors
   class ServiceDiscoveryError < Error; end
 
