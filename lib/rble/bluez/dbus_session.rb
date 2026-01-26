@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'async_call'
+
 module RBLE
   module BlueZ
     # Encapsulates a D-Bus connection and event loop lifecycle for a single BLE session.
@@ -22,6 +24,8 @@ module RBLE
     #   session.disconnect  # stops event loop and closes connection
     #
     class DBusSession
+      include AsyncCall
+
       # Create a new DBusSession (not yet connected)
       def initialize
         @connection = nil
