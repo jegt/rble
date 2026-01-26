@@ -4,11 +4,12 @@ module RBLE
   module BlueZ
     # Manages D-Bus system bus connection to BlueZ
     class DBusConnection
-      attr_reader :bus, :service
+      attr_reader :bus, :service, :root_object
 
       def initialize
         @bus = nil
         @service = nil
+        @root_object = nil
       end
 
       # Connect to D-Bus system bus
@@ -19,19 +20,16 @@ module RBLE
       def connect
         @bus = DBus::ASystemBus.new
         @service = @bus.service(BLUEZ_SERVICE)
+
+        # Pre-introspect root for ObjectManager (REL-01: before async context)
+        # This ensures ObjectManager is available without async introspection
+        @root_object = @service.object('/')
+        @root_object.introspect
       rescue DBus::Error => e
         if e.message.include?('AccessDenied') || e.message.include?('Permission')
           raise PermissionError.new('connect to D-Bus')
         end
         raise Error, "Failed to connect to BlueZ D-Bus service: #{e.message}"
-      end
-
-      # Get the root object for ObjectManager interface
-      # @return [DBus::ProxyObject]
-      def root_object
-        obj = @service.object('/')
-        obj.introspect
-        obj
       end
 
       # Get object manager interface
@@ -57,6 +55,7 @@ module RBLE
 
       # Disconnect (cleanup)
       def disconnect
+        @root_object = nil
         @service = nil
         @bus = nil
       end
