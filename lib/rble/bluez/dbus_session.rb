@@ -68,6 +68,7 @@ module RBLE
 
           @event_loop = EventLoop.new
           @event_loop.start(@connection.bus)
+          setup_cache_invalidation_handler
         end
       end
 
@@ -167,6 +168,29 @@ module RBLE
         return 0 unless event_loop
 
         event_loop.drain_events(&block)
+      end
+
+      private
+
+      # Setup handler to clear introspection cache when devices are removed
+      # Called when event loop starts to ensure stale introspection data is cleared
+      # when BlueZ removes devices
+      # Must be called within @mutex.synchronize
+      def setup_cache_invalidation_handler
+        return unless @connection&.connected?
+
+        root = @connection.root_object
+        om = root[OBJECT_MANAGER_INTERFACE]
+
+        om.on_signal('InterfacesRemoved') do |path, _interfaces|
+          # Clear the removed path
+          clear_introspection(path)
+
+          # Clear all child paths (e.g., /dev_XX/service0001 when /dev_XX removed)
+          @introspection_cache.keys.each do |cached_path|
+            clear_introspection(cached_path) if cached_path.start_with?("#{path}/")
+          end
+        end
       end
     end
   end
