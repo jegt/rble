@@ -122,6 +122,13 @@ module RBLE
     end
   end
 
+  # Raised when an async operation is pending and the session is closed
+  class SessionClosedError < ConnectionError
+    def initialize
+      super('Session closed while operation was pending')
+    end
+  end
+
   # Base class for service discovery errors
   class ServiceDiscoveryError < Error; end
 
