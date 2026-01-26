@@ -3,6 +3,7 @@
 require_relative 'async_call'
 require_relative 'async_introspection'
 require_relative 'async_gatt_operations'
+require_relative 'async_connection_operations'
 
 module RBLE
   module BlueZ
@@ -29,6 +30,7 @@ module RBLE
       include AsyncCall
       include AsyncIntrospection
       include AsyncGattOperations
+      include AsyncConnectionOperations
 
       # Create a new DBusSession (not yet connected)
       def initialize
