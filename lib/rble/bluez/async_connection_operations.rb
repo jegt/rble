@@ -186,6 +186,10 @@ module RBLE
 
         true
       rescue DBus::Error => e
+        # Idempotent: "InProgress" means discovery already started (race condition)
+        # This can happen if another process starts discovery between our check and the call
+        return true if e.name == 'org.bluez.Error.InProgress'
+
         translate_discovery_error(e, adapter_path)
       end
 
@@ -216,6 +220,10 @@ module RBLE
 
         true
       rescue DBus::Error => e
+        # Idempotent: "No discovery started" means discovery already stopped (race condition)
+        # This can happen if BlueZ auto-stops discovery between our check and the call
+        return true if e.message.include?('No discovery started')
+
         translate_discovery_error(e, adapter_path)
       end
 

@@ -175,7 +175,8 @@ RSpec.describe 'Stress Tests', :integration do
     it 'runs session lifecycle 5 times without deadlock' do
       skip 'No Bluetooth adapter available' unless adapter_available?
 
-      Timeout.timeout(60) do
+      # Allow more time since BlueZ state from previous tests may need cleanup
+      Timeout.timeout(120) do
         5.times do |i|
           RBLE.logger&.info("[STRESS] Iteration #{i + 1}/5")
 
@@ -190,7 +191,8 @@ RSpec.describe 'Stress Tests', :integration do
           session.close
           expect(session.closed?).to be true
 
-          sleep 0.5  # Brief pause between iterations
+          # Give BlueZ time to fully clean up between iterations
+          sleep 1.0
         end
       end
     end

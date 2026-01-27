@@ -628,7 +628,8 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
         end
       end
 
-      it 'raises ScanInProgressError for InProgress' do
+      it 'returns true for InProgress (idempotent)' do
+        # InProgress means discovery already running - that's what caller wanted
         dbus_error = DBus::Error.new('org.bluez.Error.InProgress')
         allow(dbus_error).to receive(:name).and_return('org.bluez.Error.InProgress')
         allow(dbus_error).to receive(:message).and_return('In progress')
@@ -637,9 +638,8 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
           block.call(dbus_error)
         end
 
-        expect {
-          subject_instance.async_start_discovery(adapter_path)
-        }.to raise_error(RBLE::ScanInProgressError)
+        result = subject_instance.async_start_discovery(adapter_path)
+        expect(result).to eq(true)
       end
 
       it 'raises PermissionError for NotAuthorized' do
