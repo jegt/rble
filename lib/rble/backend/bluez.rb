@@ -687,8 +687,8 @@ module RBLE
       # Process existing devices from a D-Bus session
       # @param session [DBusSession] D-Bus session to use
       def process_existing_devices_from_session(session)
-        om = session.object_manager
-        managed = om.GetManagedObjects.first
+        # Use async call to avoid deadlock with event loop
+        managed = session.async_get_managed_objects(timeout: 10)
 
         managed.each do |path, interfaces|
           next unless interfaces.key?(RBLE::BlueZ::DEVICE_INTERFACE)
