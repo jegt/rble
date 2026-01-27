@@ -18,4 +18,10 @@ RSpec.configure do |config|
 
   config.order = :random
   Kernel.srand config.seed
+
+  # Reset backend singleton after each test to prevent state leakage
+  # between tests that use real Bluetooth hardware
+  config.after(:each) do
+    RBLE::Backend.reset! if defined?(RBLE::Backend)
+  end
 end
