@@ -404,10 +404,10 @@ module RBLE
                              "This may indicate corrupted D-Bus introspection data."
         end
 
-        # Get UUID from characteristic properties via Properties interface
-        char_uuid = props_iface.Get(
-          RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE, 'UUID'
-        ).first
+        # Get UUID from characteristic properties - use async call to avoid deadlock
+        char_uuid = session.async_get_property(
+          char_path, RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE, 'UUID', timeout: timeout
+        )
 
         # Subscribe to PropertiesChanged signal for value updates
         # Events are enqueued to the Connection's event loop
