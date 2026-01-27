@@ -72,9 +72,11 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       # Simulate ServicesResolved becoming true
       allow(mock_props_iface).to receive(:on_signal).with('PropertiesChanged') do |&block|
         # Trigger the callback with ServicesResolved = true
-        Thread.new do
-          sleep 0.01
-          block.call('org.bluez.Device1', { 'ServicesResolved' => true }, [])
+        if block
+          Thread.new do
+            sleep 0.01
+            block&.call('org.bluez.Device1', { 'ServicesResolved' => true }, [])
+          end
         end
       end
 
