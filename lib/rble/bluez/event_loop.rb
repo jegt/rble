@@ -68,7 +68,9 @@ module RBLE
         # Signal any blocked queue readers
         enqueue(:shutdown, nil, nil)
 
-        if @thread&.alive?
+        # Skip join if called from within the event loop thread itself
+        # (e.g., during disconnect callback handling)
+        if @thread&.alive? && @thread != Thread.current
           @thread.join(timeout)
           @thread.kill if @thread.alive? # Force kill if still running
         end
