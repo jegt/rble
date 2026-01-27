@@ -997,8 +997,8 @@ module RBLE
       # @return [Array<Hash>] Service data with characteristics and their paths
       #   Each hash contains: :uuid, :primary, :characteristics (array of {data:, path:})
       def enumerate_services_from_session(session, device_path)
-        om = session.object_manager
-        managed = om.GetManagedObjects.first
+        # Use async call to avoid deadlock with event loop
+        managed = session.async_get_managed_objects(timeout: 10)
 
         # Find all services under this device
         services = []
