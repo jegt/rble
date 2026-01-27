@@ -239,6 +239,16 @@ module RBLE
         proxy = async_introspect(object_path, timeout: timeout)
         props_iface = proxy[PROPERTIES_INTERFACE]
 
+        # Validate introspection succeeded - Properties interface must have Get method
+        # This can fail if introspection returned truncated/corrupt XML
+        # Note: Don't call refresh_introspection here as it can invalidate proxies
+        # that other code is using (e.g., async_start_notify gets char_iface before
+        # calling async_get_property for Flags check)
+        unless props_iface.respond_to?(:Get)
+          raise RBLE::Error, "Introspection incomplete for #{object_path}: Properties interface has no Get method. " \
+                             "This may indicate corrupted D-Bus introspection data."
+        end
+
         result = async_call("Get(#{interface}.#{property})", timeout: timeout) do |queue, _request_id, cancelled|
           props_iface.Get(interface, property) do |reply|
             next if cancelled[0]  # Discard late callback

@@ -398,8 +398,14 @@ module RBLE
         proxy = session.async_introspect(char_path, timeout: timeout)
         props_iface = proxy[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
-        # Get UUID from characteristic properties
-        char_uuid = proxy[RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE].Get(
+        # Validate introspection succeeded - Properties interface must have Get method
+        unless props_iface.respond_to?(:Get)
+          raise RBLE::Error, "Introspection incomplete for #{char_path}: Properties interface has no Get method. " \
+                             "This may indicate corrupted D-Bus introspection data."
+        end
+
+        # Get UUID from characteristic properties via Properties interface
+        char_uuid = props_iface.Get(
           RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE, 'UUID'
         ).first
 
