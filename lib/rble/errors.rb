@@ -129,6 +129,79 @@ module RBLE
     end
   end
 
+  # Raised when BlueZ returns org.bluez.Error.InProgress after retries exhausted
+  class OperationInProgressError < ConnectionError
+    def initialize(operation = nil)
+      msg = operation ? "Operation '#{operation}' still in progress after retries." : 'Operation still in progress after retries.'
+      super(msg)
+    end
+
+    def recovery_hint
+      'Wait a moment and retry the operation. If persists, disconnect and reconnect.'
+    end
+  end
+
+  # Raised when adapter is not ready (e.g., not powered, not initialized)
+  class AdapterNotReadyError < Error
+    def initialize(adapter = nil)
+      msg = adapter ? "Adapter '#{adapter}' is not ready." : 'Bluetooth adapter is not ready.'
+      super(msg)
+    end
+
+    def recovery_hint
+      "Run 'bluetoothctl power on' to enable the adapter, or wait for initialization to complete."
+    end
+  end
+
+  # Raised when authentication/pairing fails during connection
+  class AuthenticationError < ConnectionError
+    attr_reader :address
+
+    def initialize(address = nil)
+      @address = address
+      msg = address ? "Authentication failed for device #{address}." : 'Authentication failed.'
+      super(msg)
+    end
+
+    def recovery_hint
+      'Remove the device pairing and re-pair: bluetoothctl remove <address>, then bluetoothctl pair <address>'
+    end
+  end
+
+  # Raised when connection is aborted (often due to RF interference or device busy)
+  class ConnectionAbortedError < ConnectionError
+    attr_reader :address
+
+    def initialize(address = nil, reason = nil)
+      @address = address
+      msg = address ? "Connection to #{address} was aborted" : 'Connection was aborted'
+      msg = "#{msg}: #{reason}" if reason
+      super(msg)
+    end
+
+    def recovery_hint
+      'This may be caused by RF interference, device busy, or distance. Move closer to the device and retry.'
+    end
+  end
+
+  # Raised when connection is lost unexpectedly during an operation
+  class ConnectionLostError < ConnectionError
+    attr_reader :address, :operation
+
+    def initialize(address = nil, operation = nil)
+      @address = address
+      @operation = operation
+      msg = 'Connection lost'
+      msg = "#{msg} to #{address}" if address
+      msg = "#{msg} during #{operation}" if operation
+      super(msg)
+    end
+
+    def recovery_hint
+      'Reconnect with RBLE.connect(). Check device is still in range and powered.'
+    end
+  end
+
   # Base class for service discovery errors
   class ServiceDiscoveryError < Error; end
 

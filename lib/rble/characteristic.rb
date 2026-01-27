@@ -146,8 +146,10 @@ module RBLE
       raise NotSupportedError, 'read' unless readable?
       raise NotConnectedError unless @connection.connected?
 
-      # Pass connection so backend can use its D-Bus session
-      @backend.read_characteristic(@path, connection: @connection, timeout: timeout)
+      # Serialize GATT operations through the connection's queue
+      enqueue_gatt_operation do
+        @backend.read_characteristic(@path, connection: @connection, timeout: timeout)
+      end
     end
 
     # Read the characteristic value as byte array
@@ -176,8 +178,10 @@ module RBLE
       end
       raise NotConnectedError unless @connection.connected?
 
-      # Pass connection so backend can use its D-Bus session
-      @backend.write_characteristic(@path, data, connection: @connection, response: response, timeout: timeout)
+      # Serialize GATT operations through the connection's queue
+      enqueue_gatt_operation do
+        @backend.write_characteristic(@path, data, connection: @connection, response: response, timeout: timeout)
+      end
     end
 
     # Subscribe to characteristic notifications/indications
@@ -187,13 +191,15 @@ module RBLE
     # @raise [NotifyNotSupported] if characteristic doesn't support notifications
     # @raise [NotConnectedError] if not connected
     # @raise [NotifyError] if subscription fails
-    def subscribe(&)
+    def subscribe(&block)
       raise ArgumentError, 'Block required' unless block_given?
       raise NotifyNotSupported.new(short_uuid, flags) unless subscribable?
       raise NotConnectedError unless @connection.connected?
 
-      # Pass connection so backend can use its D-Bus session for event delivery
-      @backend.subscribe_characteristic(@path, connection: @connection, &)
+      # Serialize GATT operations through the connection's queue
+      enqueue_gatt_operation do
+        @backend.subscribe_characteristic(@path, connection: @connection, &block)
+      end
       @subscribed = true
     end
 
@@ -210,6 +216,20 @@ module RBLE
     # @return [Boolean]
     def subscribed?
       @subscribed
+    end
+
+    private
+
+    # Enqueue a GATT operation through the connection's queue
+    # Falls back to direct execution if queue is not available (non-BlueZ backend)
+    # @yield Block containing the GATT operation
+    # @return [Object] Result from the block
+    def enqueue_gatt_operation(&block)
+      if @connection.respond_to?(:gatt_queue)
+        @connection.gatt_queue.enqueue(&block)
+      else
+        block.call
+      end
     end
   end
 end

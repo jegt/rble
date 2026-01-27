@@ -6,21 +6,7 @@ module RBLE
     class Adapter
       attr_reader :path, :name
 
-      # @param connection [DBusConnection] Active D-Bus connection
-      # @param path [String] D-Bus object path (e.g., "/org/bluez/hci0")
-      # @deprecated Use new_from_session instead for async operations
-      def initialize(connection, path)
-        @connection = connection
-        @session = nil
-        @path = path
-        @name = path.split('/').last # "hci0" from "/org/bluez/hci0"
-        @object = connection.object(path)
-        @adapter_iface = @object[ADAPTER_INTERFACE]
-        @properties_iface = @object[PROPERTIES_INTERFACE]
-      end
-
       # Create an Adapter from a DBusSession
-      # This is the preferred constructor for async operations
       # @param session [DBusSession] Active D-Bus session
       # @param path [String] D-Bus object path (e.g., "/org/bluez/hci0")
       # @return [Adapter]
@@ -40,31 +26,19 @@ module RBLE
       # Get adapter MAC address
       # @return [String]
       def address
-        if @session
-          @session.async_get_property(@path, ADAPTER_INTERFACE, 'Address', timeout: 5)
-        else
-          get_property('Address')
-        end
+        @session.async_get_property(@path, ADAPTER_INTERFACE, 'Address', timeout: 5)
       end
 
       # Check if adapter is powered on
       # @return [Boolean]
       def powered?
-        if @session
-          @session.async_get_property(@path, ADAPTER_INTERFACE, 'Powered', timeout: 5)
-        else
-          get_property('Powered')
-        end
+        @session.async_get_property(@path, ADAPTER_INTERFACE, 'Powered', timeout: 5)
       end
 
       # Check if discovery is in progress
       # @return [Boolean]
       def discovering?
-        if @session
-          @session.async_get_property(@path, ADAPTER_INTERFACE, 'Discovering', timeout: 5)
-        else
-          get_property('Discovering')
-        end
+        @session.async_get_property(@path, ADAPTER_INTERFACE, 'Discovering', timeout: 5)
       end
 
       # Set discovery filter before starting scan
@@ -86,34 +60,18 @@ module RBLE
         filter_options[:rssi] = rssi if rssi
         filter_options[:pathloss] = pathloss if pathloss
 
-        # If using session, delegate to async_start_discovery (which handles filter)
-        # Otherwise fall back to synchronous call for backward compatibility
-        unless @session
-          # Legacy synchronous path
-          filter = build_legacy_filter(filter_options)
-          @adapter_iface.SetDiscoveryFilter(filter)
-        end
-        # When using @session, filter is applied in start_discovery via async_start_discovery
-        @pending_filter = filter_options if @session
+        # Store filter for application in start_discovery via async_start_discovery
+        @pending_filter = filter_options
       rescue DBus::Error => e
         raise ScanError, "Failed to set discovery filter: #{e.message}"
       end
 
       # Start BLE discovery
-      # @raise [AdapterDisabledError] if adapter not powered (legacy mode only)
       def start_discovery
-        if @session
-          # Async path: idempotent, handles powered? check internally
-          filter = @pending_filter || { transport: 'le' }
-          @session.async_start_discovery(@path, filter: filter, timeout: 10)
-          @pending_filter = nil
-        else
-          # Legacy synchronous path
-          raise AdapterDisabledError.new(@name) unless powered?
-          raise ScanInProgressError if discovering?
-
-          @adapter_iface.StartDiscovery
-        end
+        # Async path: idempotent, handles powered? check internally
+        filter = @pending_filter || { transport: 'le' }
+        @session.async_start_discovery(@path, filter: filter, timeout: 10)
+        @pending_filter = nil
       rescue DBus::Error => e
         if e.message.include?('InProgress')
           raise ScanInProgressError
@@ -125,15 +83,8 @@ module RBLE
 
       # Stop BLE discovery
       def stop_discovery
-        if @session
-          # Async path: idempotent, no need to check discovering?
-          @session.async_stop_discovery(@path, timeout: 10)
-        else
-          # Legacy synchronous path
-          return unless discovering?
-
-          @adapter_iface.StopDiscovery
-        end
+        # Async path: idempotent, no need to check discovering?
+        @session.async_stop_discovery(@path, timeout: 10)
       rescue DBus::Error => e
         # Ignore "not discovering" errors during cleanup
         unless e.message.include?('NotAuthorized') || e.message.include?('NotDiscovering')
@@ -152,61 +103,6 @@ module RBLE
       end
 
       private
-
-      def get_property(name)
-        @properties_iface.Get(ADAPTER_INTERFACE, name).first
-      rescue DBus::Error
-        nil
-      end
-
-      # Build legacy D-Bus filter hash from filter options
-      # @param options [Hash] Filter options
-      # @return [Hash] D-Bus compatible filter hash with Variants
-      def build_legacy_filter(options)
-        filter = {}
-
-        # Transport: STRING
-        if options[:transport]
-          filter['Transport'] = DBus::Data::Variant.new(
-            options[:transport].to_s,
-            member_type: DBus::Type::STRING
-          )
-        end
-
-        # DuplicateData: BOOLEAN
-        if options.key?(:duplicate_data)
-          filter['DuplicateData'] = DBus::Data::Variant.new(
-            !!options[:duplicate_data],
-            member_type: DBus::Type::BOOLEAN
-          )
-        end
-
-        # UUIDs: Array[STRING]
-        if options[:uuids] && !options[:uuids].empty?
-          filter['UUIDs'] = DBus::Data::Variant.new(
-            options[:uuids],
-            member_type: DBus::Type::Array[DBus::Type::STRING]
-          )
-        end
-
-        # RSSI: INT16
-        if options[:rssi]
-          filter['RSSI'] = DBus::Data::Variant.new(
-            options[:rssi].to_i,
-            member_type: DBus::Type::INT16
-          )
-        end
-
-        # Pathloss: UINT16
-        if options[:pathloss]
-          filter['Pathloss'] = DBus::Data::Variant.new(
-            options[:pathloss].to_i,
-            member_type: DBus::Type::UINT16
-          )
-        end
-
-        filter
-      end
 
       # Normalize UUID to BlueZ format (lowercase, with hyphens for 128-bit)
       def normalize_uuid(uuid)

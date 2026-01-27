@@ -46,6 +46,8 @@ module RBLE
 
         @scan_callback = block
         @allow_duplicates = allow_duplicates
+        # Store normalized service UUIDs for secondary filtering (BlueZ may ignore filter)
+        @service_uuid_filter = service_uuids&.map { |uuid| normalize_uuid_for_filter(uuid) }
         @state_mutex.synchronize { @known_devices.clear }
 
         begin
@@ -81,8 +83,8 @@ module RBLE
             adapter = RBLE::BlueZ::Adapter.new_from_session(@scan_session, @scan_adapter_path)
             adapter.stop_discovery
           end
-        rescue StandardError
-          # Ignore errors during cleanup
+        rescue StandardError => e
+          RBLE.logger&.debug("[RBLE] Error during stop_scan cleanup: #{e.class}: #{e.message}")
         end
 
         # Destroy the temporary scan session - this connection is never reused
@@ -143,6 +145,12 @@ module RBLE
         # Check if already connected (thread-safe)
         @state_mutex.synchronize do
           raise AlreadyConnectedError if @connected_devices.key?(device_path)
+        end
+
+        # Auto-stop scan before connect - BlueZ doesn't handle scan+connect well
+        if scanning?
+          RBLE.logger&.warn('[RBLE] Stopping scan before connect (BlueZ limitation)')
+          stop_scan
         end
 
         # Create DBusSession for async operations
@@ -492,8 +500,8 @@ module RBLE
           # Handle unexpected disconnect
           handle_unexpected_disconnect(device_path) if device_path
           raise
-        rescue StandardError
-          # Ignore other errors during cleanup
+        rescue StandardError => e
+          RBLE.logger&.debug("[RBLE] Error during unsubscribe cleanup: #{e.class}: #{e.message}")
         end
 
         true
@@ -667,8 +675,8 @@ module RBLE
           end
         end
         @signal_handlers << [:properties_changed, props_iface, device_path]
-      rescue StandardError
-        # Device may have disappeared, ignore
+      rescue StandardError => e
+        RBLE.logger&.debug("[RBLE] Failed to subscribe to device properties for #{device_path}: #{e.class}: #{e.message}")
       end
 
       # Start discovery on the scan session's adapter
@@ -724,6 +732,13 @@ module RBLE
 
       def handle_device_found(path, properties)
         return unless @scan_adapter_path && path.start_with?(@scan_adapter_path)
+
+        # Secondary UUID filter verification - BlueZ may ignore the filter in some cases
+        # Check if device advertises any of the requested service UUIDs
+        if @service_uuid_filter && !@service_uuid_filter.empty?
+          device_uuids = (properties['UUIDs'] || []).map { |u| normalize_uuid_for_filter(u) }
+          return unless @service_uuid_filter.any? { |filter_uuid| device_uuids.include?(filter_uuid) }
+        end
 
         device = build_device(path, properties)
 
@@ -842,6 +857,27 @@ module RBLE
         end
       end
 
+      # Normalize UUID for filter comparison
+      # Converts short UUIDs (e.g., "180d") to full 128-bit format
+      # @param uuid [String] UUID in any format
+      # @return [String] Lowercase 128-bit UUID
+      def normalize_uuid_for_filter(uuid)
+        uuid = uuid.to_s.downcase.delete('-')
+        if uuid.length == 4
+          # Short 16-bit UUID - expand to full 128-bit Bluetooth Base UUID
+          "0000#{uuid}-0000-1000-8000-00805f9b34fb"
+        elsif uuid.length == 8
+          # 32-bit UUID - expand to full 128-bit Bluetooth Base UUID
+          "#{uuid}-0000-1000-8000-00805f9b34fb"
+        elsif uuid.length == 32
+          # Full UUID without hyphens - add hyphens
+          "#{uuid[0..7]}-#{uuid[8..11]}-#{uuid[12..15]}-#{uuid[16..19]}-#{uuid[20..31]}"
+        else
+          # Already formatted
+          uuid.downcase
+        end
+      end
+
       # Clean up scan-specific state by destroying the temporary scan session
       # After this, the scan D-Bus connection is never reused (fresh session per scan)
       def stop_scan_cleanup
@@ -863,6 +899,7 @@ module RBLE
         end
 
         @scan_callback = nil
+        @service_uuid_filter = nil
       end
 
       # Full cleanup - resets all backend state
@@ -898,58 +935,6 @@ module RBLE
         conn = RBLE::BlueZ::DBusConnection.new
         conn.connect
         conn
-      end
-
-      # Setup an event loop for connection state tracking
-      def setup_connection_event_loop(conn, device_path)
-        event_loop = RBLE::BlueZ::EventLoop.new
-
-        # Subscribe to PropertiesChanged on the device
-        device_obj = conn.object(device_path)
-        props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
-
-        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
-          event_loop.enqueue(:properties_changed, device_path, changed) if interface == RBLE::BlueZ::DEVICE_INTERFACE
-        end
-
-        # Start the event loop
-        event_loop.start(conn.bus)
-        event_loop
-      end
-
-      # Cleanup a connection event loop
-      def cleanup_connection_event_loop(event_loop)
-        event_loop&.stop
-      end
-
-      # Wait for a property to change to expected value
-      # @param event_loop [EventLoop] Event loop to use
-      # @param device_path [String] Device path to watch
-      # @param property [String] Property name (e.g., 'Connected', 'ServicesResolved')
-      # @param expected_value [Object] Expected property value
-      # @param timeout [Numeric] Timeout in seconds
-      # @raise [ConnectionTimeoutError] if timeout exceeded
-      def wait_for_property(event_loop, device_path, property, expected_value, timeout)
-        deadline = Time.now + timeout
-
-        loop do
-          remaining = deadline - Time.now
-          raise ConnectionTimeoutError, timeout if remaining <= 0
-
-          # Process events with timeout
-          shutdown = event_loop.process_events(timeout: [remaining, 0.5].min) do |event|
-            next unless event.type == :properties_changed
-            next unless event.path == device_path
-            next unless event.data.is_a?(Hash) && event.data.key?(property)
-
-            return true if event.data[property] == expected_value
-          end
-
-          # Check if we received shutdown
-          break if shutdown
-        end
-
-        raise ConnectionTimeoutError, timeout
       end
 
       # Wait for a property to change using a DBusSession

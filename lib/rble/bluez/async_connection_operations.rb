@@ -40,6 +40,11 @@ module RBLE
       DEFAULT_DISCOVERY_TIMEOUT = 10
       DEFAULT_PROPERTY_TIMEOUT = 5
 
+      # Delay after ServicesResolved to allow BlueZ to fully export GATT services to D-Bus.
+      # BlueZ signals ServicesResolved=true slightly before all service/characteristic
+      # objects are available via GetManagedObjects. This delay prevents race conditions.
+      SERVICES_RESOLVED_DELAY = 0.15
+
       # Async connect to a BLE device
       #
       # @param device_path [String] D-Bus device path
@@ -64,6 +69,8 @@ module RBLE
             services_resolved = async_get_property(device_path, DEVICE_INTERFACE, 'ServicesResolved', timeout: timeout)
             unless services_resolved
               wait_for_services_resolved(props_iface, timeout: timeout)
+              # Delay to allow BlueZ to fully export GATT services to D-Bus
+              sleep(SERVICES_RESOLVED_DELAY)
             end
           end
           return true
@@ -103,6 +110,8 @@ module RBLE
               result = services_queue.pop(timeout: timeout)
               raise TimeoutError.new('ServicesResolved', timeout) if result.nil?
             end
+            # Delay to allow BlueZ to fully export GATT services to D-Bus
+            sleep(SERVICES_RESOLVED_DELAY)
           end
 
           true
@@ -402,21 +411,23 @@ module RBLE
           raise AlreadyConnectedError
         when 'org.bluez.Error.NotConnected'
           raise NotConnectedError
+        when 'org.bluez.Error.AuthenticationFailed'
+          raise AuthenticationError.new(address)
         when 'org.bluez.Error.Failed'
           # Parse message for more context
           if error.message.include?('le-connection-abort') ||
              error.message.include?('Software caused connection abort') ||
              error.message.include?('br-connection-abort')
-            raise ConnectionFailed.new(address, 'connection aborted')
+            raise ConnectionAbortedError.new(address, 'connection aborted by stack')
           elsif error.message.include?('Host is down')
             raise ConnectionFailed.new(address, 'device not reachable (out of range?)')
           else
             raise ConnectionFailed.new(address, error.message)
           end
         when 'org.bluez.Error.NotReady'
-          raise AdapterNotFoundError, 'Bluetooth adapter not ready'
+          raise AdapterNotReadyError.new
         when 'org.bluez.Error.InProgress'
-          raise ConnectionError, "Connection already in progress for #{address}"
+          raise OperationInProgressError.new("connect to #{address}")
         when 'org.freedesktop.DBus.Error.UnknownObject'
           raise DeviceNotFoundError.new(address)
         else
@@ -430,7 +441,7 @@ module RBLE
 
         case error.name
         when 'org.bluez.Error.NotReady'
-          raise AdapterNotFoundError, "Adapter #{adapter_name} not ready"
+          raise AdapterNotReadyError.new(adapter_name)
         when 'org.bluez.Error.Failed'
           raise ScanError, "Discovery failed on #{adapter_name}: #{error.message}"
         when 'org.bluez.Error.InProgress'

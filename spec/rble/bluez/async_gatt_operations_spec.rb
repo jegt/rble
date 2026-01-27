@@ -98,7 +98,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
       }
     end
 
-    it 'raises NotConnectedError for org.bluez.Error.NotConnected' do
+    it 'raises ConnectionLostError for org.bluez.Error.NotConnected' do
       dbus_error = DBus::Error.new('org.bluez.Error.NotConnected: Not connected')
       allow(dbus_error).to receive(:name).and_return('org.bluez.Error.NotConnected')
       allow(dbus_error).to receive(:message).and_return('Not connected')
@@ -109,7 +109,7 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
 
       expect {
         subject_instance.async_read_value(char_path)
-      }.to raise_error(RBLE::NotConnectedError) { |e|
+      }.to raise_error(RBLE::ConnectionLostError) { |e|
         expect(e.message).to include('char0011')
       }
     end
@@ -297,9 +297,8 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
 
       expect {
         subject_instance.async_read_value(char_path)
-      }.to raise_error(RBLE::GATTError) { |e|
+      }.to raise_error(RBLE::OperationInProgressError) { |e|
         expect(e.message).to include('char0011')
-        expect(e.message).to include('InProgress')
       }
     end
 

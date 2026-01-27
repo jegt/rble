@@ -197,7 +197,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       expect(result).to eq(true)
     end
 
-    it 'raises ConnectionFailed on org.bluez.Error.Failed' do
+    it 'raises ConnectionAbortedError on org.bluez.Error.Failed with connection abort' do
       dbus_error = DBus::Error.new('org.bluez.Error.Failed: br-connection-abort')
       allow(dbus_error).to receive(:name).and_return('org.bluez.Error.Failed')
       allow(dbus_error).to receive(:message).and_return('br-connection-abort')
@@ -208,7 +208,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
 
       expect {
         subject_instance.async_connect(device_path, wait_for_services: false)
-      }.to raise_error(RBLE::ConnectionFailed) { |e|
+      }.to raise_error(RBLE::ConnectionAbortedError) { |e|
         expect(e.message).to include('AA:BB:CC:DD:EE:FF')
       }
     end
@@ -229,7 +229,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       }
     end
 
-    it 'raises AdapterNotFoundError on org.bluez.Error.NotReady' do
+    it 'raises AdapterNotReadyError on org.bluez.Error.NotReady' do
       dbus_error = DBus::Error.new('org.bluez.Error.NotReady')
       allow(dbus_error).to receive(:name).and_return('org.bluez.Error.NotReady')
       allow(dbus_error).to receive(:message).and_return('Adapter not ready')
@@ -240,7 +240,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
 
       expect {
         subject_instance.async_connect(device_path, wait_for_services: false)
-      }.to raise_error(RBLE::AdapterNotFoundError)
+      }.to raise_error(RBLE::AdapterNotReadyError)
     end
 
     it 'unsubscribes signal handler in ensure block' do
@@ -423,7 +423,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       }.to raise_error(RBLE::ScanError)
     end
 
-    it 'raises AdapterNotFoundError on NotReady' do
+    it 'raises AdapterNotReadyError on NotReady' do
       dbus_error = DBus::Error.new('org.bluez.Error.NotReady')
       allow(dbus_error).to receive(:name).and_return('org.bluez.Error.NotReady')
       allow(dbus_error).to receive(:message).and_return('Not ready')
@@ -434,7 +434,7 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
 
       expect {
         subject_instance.async_start_discovery(adapter_path)
-      }.to raise_error(RBLE::AdapterNotFoundError)
+      }.to raise_error(RBLE::AdapterNotReadyError)
     end
   end
 

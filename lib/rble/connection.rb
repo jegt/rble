@@ -55,6 +55,9 @@ module RBLE
       @notification_thread = nil
       @notification_mutex = Mutex.new
 
+      # GATT operation queue for serializing read/write/subscribe operations
+      @gatt_queue = nil
+
       # Create owned D-Bus session for BlueZ backend
       # Each Connection gets its own D-Bus connection + event loop to avoid
       # state corruption issues when shared connections are used
@@ -116,8 +119,9 @@ module RBLE
         @services = build_services_with_active_characteristics(raw_services)
         transition_to(:connected)
         @services
-      rescue StandardError
+      rescue StandardError => e
         # On failure, return to connected state (if not already disconnected)
+        RBLE.logger&.debug("[RBLE] Service discovery failed: #{e.class}: #{e.message}")
         transition_to(:connected) if state == :discovering_services
         raise
       end
@@ -350,12 +354,16 @@ module RBLE
     end
 
     # Destroy D-Bus session
-    # Stops notification thread first, then event loop and closes connection
+    # Stops GATT queue, notification thread, event loop and closes connection
     # @return [void]
     def destroy_dbus_session
       return unless @dbus_session
 
-      # Stop notification thread first
+      # Stop GATT operation queue first
+      @gatt_queue&.stop
+      @gatt_queue = nil
+
+      # Stop notification thread
       @notification_mutex.synchronize do
         if @notification_thread&.alive?
           # Thread will exit naturally when it sees we're disconnected
@@ -374,6 +382,17 @@ module RBLE
       ensure
         @dbus_session = nil
       end
+    end
+
+    # Get or create GATT operation queue for this connection
+    # Queue is started on first access and stopped on disconnect
+    # @return [RBLE::BlueZ::GattOperationQueue]
+    def gatt_queue
+      return @gatt_queue if @gatt_queue&.running?
+
+      @gatt_queue = RBLE::BlueZ::GattOperationQueue.new
+      @gatt_queue.start
+      @gatt_queue
     end
 
     # Transition to a new state, calling callbacks outside the mutex

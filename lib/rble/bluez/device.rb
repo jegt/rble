@@ -7,23 +7,7 @@ module RBLE
     class Device
       attr_reader :path, :address
 
-      # @param connection [DBusConnection] D-Bus connection instance
-      # @param device_path [String] D-Bus object path (e.g., /org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX)
-      # @deprecated Use new_from_session instead for async operations
-      def initialize(connection, device_path)
-        @connection = connection
-        @session = nil
-        @path = device_path
-        @address = extract_address_from_path(device_path)
-
-        # Get D-Bus object and interfaces
-        @object = connection.object(device_path)
-        @device_iface = @object[DEVICE_INTERFACE]
-        @props_iface = @object[PROPERTIES_INTERFACE]
-      end
-
       # Create a Device from a DBusSession
-      # This is the preferred constructor for async operations
       # @param session [DBusSession] Active D-Bus session
       # @param device_path [String] D-Bus object path (e.g., /org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX)
       # @return [Device]
@@ -43,51 +27,33 @@ module RBLE
       # Check if device is currently connected
       # @return [Boolean] true if connected
       def connected?
-        if @session
-          @session.async_get_property(@path, DEVICE_INTERFACE, 'Connected', timeout: 5)
-        else
-          get_property('Connected')
-        end
+        @session.async_get_property(@path, DEVICE_INTERFACE, 'Connected', timeout: 5)
       end
 
       # Check if GATT services have been resolved
       # @return [Boolean] true if services are resolved
       def services_resolved?
-        if @session
-          @session.async_get_property(@path, DEVICE_INTERFACE, 'ServicesResolved', timeout: 5)
-        else
-          get_property('ServicesResolved')
-        end
+        @session.async_get_property(@path, DEVICE_INTERFACE, 'ServicesResolved', timeout: 5)
       end
 
       # Get device name from adapter cache
       # @return [String, nil] device name or nil if not known
       def name
-        if @session
-          @session.async_get_property(@path, DEVICE_INTERFACE, 'Name', timeout: 5)
-        else
-          get_property('Name')
-        end
+        @session.async_get_property(@path, DEVICE_INTERFACE, 'Name', timeout: 5)
       rescue DBus::Error
         nil
       end
 
       # Connect to device
-      # When using session, waits for connection and optionally for services to resolve
+      # Waits for connection and optionally for services to resolve
       # @param wait_for_services [Boolean] Wait for GATT services to be discovered (default: true)
       # @param timeout [Numeric] Connection timeout in seconds (default: 30)
       # @return [Boolean] true on success
       # @raise [ConnectionError] if connection fails
       # @raise [TimeoutError] if connection times out
       def connect(wait_for_services: true, timeout: 30)
-        if @session
-          # Async path: handles waiting for connection and services
-          @session.async_connect(@path, wait_for_services: wait_for_services, timeout: timeout)
-        else
-          # Legacy synchronous path: just initiates connection
-          @device_iface.Connect
-          true
-        end
+        # Async path: handles waiting for connection and services
+        @session.async_connect(@path, wait_for_services: wait_for_services, timeout: timeout)
       rescue DBus::Error => e
         raise ConnectionError, "Failed to initiate connection: #{e.message}"
       end
@@ -97,24 +63,10 @@ module RBLE
       # @return [Boolean] true on success
       # @raise [ConnectionError] if disconnect fails
       def disconnect(timeout: 5)
-        if @session
-          # Async path: idempotent disconnect
-          @session.async_disconnect(@path, timeout: timeout)
-        else
-          # Legacy synchronous path
-          @device_iface.Disconnect
-          true
-        end
+        # Async path: idempotent disconnect
+        @session.async_disconnect(@path, timeout: timeout)
       rescue DBus::Error => e
         raise ConnectionError, "Failed to disconnect: #{e.message}"
-      end
-
-      # Read a property value from the Device1 interface
-      # Used by legacy synchronous path only
-      # @param name [String] property name
-      # @return [Object] property value
-      def get_property(name)
-        @props_iface.Get(DEVICE_INTERFACE, name).first
       end
 
       private

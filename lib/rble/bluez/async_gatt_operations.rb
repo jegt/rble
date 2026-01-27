@@ -3,6 +3,7 @@
 require 'dbus'
 require_relative 'async_call'
 require_relative 'async_introspection'
+require_relative 'retry_policy'
 
 module RBLE
   module BlueZ
@@ -28,6 +29,7 @@ module RBLE
     #   async_stop_notify("/org/bluez/hci0/.../char0011")
     #
     module AsyncGattOperations
+      include RetryPolicy
       GATT_CHARACTERISTIC_INTERFACE = 'org.bluez.GattCharacteristic1'
       PROPERTIES_INTERFACE = 'org.freedesktop.DBus.Properties'
 
@@ -45,21 +47,24 @@ module RBLE
       # @raise [TimeoutError] if read times out
       # @raise [ReadError] if read fails
       # @raise [NotConnectedError] if device disconnected
+      # @raise [OperationInProgressError] if retries exhausted
       def async_read_value(char_path, timeout: DEFAULT_READ_TIMEOUT)
         uuid = extract_uuid_from_path(char_path)
 
         proxy = async_introspect(char_path, timeout: timeout)
         char_iface = proxy[GATT_CHARACTERISTIC_INTERFACE]
 
-        result = async_call("ReadValue(#{uuid})", timeout: timeout) do |queue, _request_id, cancelled|
-          char_iface.ReadValue({}) do |reply|
-            next if cancelled[0]  # Discard late callback
-            if reply.is_a?(DBus::Error)
-              queue.push([reply, nil])
-            else
-              # Extract params from DBus::Message - ReadValue returns [Array<Byte>]
-              params = reply.respond_to?(:params) ? reply.params : [reply]
-              queue.push([nil, params.first])
+        result = with_inprogress_retry do
+          async_call("ReadValue(#{uuid})", timeout: timeout) do |queue, _request_id, cancelled|
+            char_iface.ReadValue({}) do |reply|
+              next if cancelled[0]  # Discard late callback
+              if reply.is_a?(DBus::Error)
+                queue.push([reply, nil])
+              else
+                # Extract params from DBus::Message - ReadValue returns [Array<Byte>]
+                params = reply.respond_to?(:params) ? reply.params : [reply]
+                queue.push([nil, params.first])
+              end
             end
           end
         end
@@ -81,6 +86,7 @@ module RBLE
       # @raise [TimeoutError] if write times out
       # @raise [WriteError] if write fails
       # @raise [NotConnectedError] if device disconnected
+      # @raise [OperationInProgressError] if retries exhausted
       def async_write_value(char_path, bytes, response: true, timeout: DEFAULT_WRITE_TIMEOUT)
         uuid = extract_uuid_from_path(char_path)
 
@@ -96,13 +102,15 @@ module RBLE
           'type' => DBus::Data::Variant.new(type_value, member_type: DBus::Type::STRING)
         }
 
-        async_call("WriteValue(#{uuid})", timeout: effective_timeout) do |queue, _request_id, cancelled|
-          char_iface.WriteValue(bytes, options) do |reply|
-            next if cancelled[0]  # Discard late callback
-            if reply.is_a?(DBus::Error)
-              queue.push([reply, nil])
-            else
-              queue.push([nil, :ok])
+        with_inprogress_retry do
+          async_call("WriteValue(#{uuid})", timeout: effective_timeout) do |queue, _request_id, cancelled|
+            char_iface.WriteValue(bytes, options) do |reply|
+              next if cancelled[0]  # Discard late callback
+              if reply.is_a?(DBus::Error)
+                queue.push([reply, nil])
+              else
+                queue.push([nil, :ok])
+              end
             end
           end
         end
@@ -120,6 +128,7 @@ module RBLE
       # @raise [TimeoutError] if call times out
       # @raise [NotifyNotSupported] if characteristic doesn't support notifications
       # @raise [NotConnectedError] if device disconnected
+      # @raise [OperationInProgressError] if retries exhausted
       def async_start_notify(char_path, timeout: DEFAULT_NOTIFY_TIMEOUT)
         uuid = extract_uuid_from_path(char_path)
 
@@ -136,13 +145,15 @@ module RBLE
         notifying = async_get_property(char_path, GATT_CHARACTERISTIC_INTERFACE, 'Notifying', timeout: timeout)
         return true if notifying
 
-        async_call("StartNotify(#{uuid})", timeout: timeout) do |queue, _request_id, cancelled|
-          char_iface.StartNotify do |reply|
-            next if cancelled[0]  # Discard late callback
-            if reply.is_a?(DBus::Error)
-              queue.push([reply, nil])
-            else
-              queue.push([nil, :ok])
+        with_inprogress_retry do
+          async_call("StartNotify(#{uuid})", timeout: timeout) do |queue, _request_id, cancelled|
+            char_iface.StartNotify do |reply|
+              next if cancelled[0]  # Discard late callback
+              if reply.is_a?(DBus::Error)
+                queue.push([reply, nil])
+              else
+                queue.push([nil, :ok])
+              end
             end
           end
         end
@@ -195,10 +206,12 @@ module RBLE
           raise NotPermittedError, "#{operation} on #{uuid}"
         when 'org.bluez.Error.NotAuthorized'
           raise NotAuthorizedError, "#{operation} on #{uuid}"
+        when 'org.bluez.Error.AuthenticationFailed'
+          raise AuthenticationError.new
         when 'org.bluez.Error.NotConnected'
-          raise NotConnectedError, "Characteristic #{uuid}: device not connected"
+          raise ConnectionLostError.new(nil, "#{operation} on #{uuid}")
         when 'org.bluez.Error.InProgress'
-          raise GATTError, "Operation in progress on #{uuid} (org.bluez.Error.InProgress)"
+          raise OperationInProgressError.new("#{operation} on #{uuid}")
         when 'org.bluez.Error.InvalidValueLength'
           raise WriteError, "Invalid data length for #{uuid} (org.bluez.Error.InvalidValueLength)"
         when 'org.bluez.Error.InvalidOffset'
