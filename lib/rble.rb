@@ -22,6 +22,24 @@ module RBLE
     # @example
     #   RBLE.trace = true
     attr_accessor :trace
+
+    # Global warning flag. Defaults to true.
+    # Set to false to suppress feature-level warnings from RBLE.
+    # @example
+    #   RBLE.warnings = false
+    attr_writer :warnings
+
+    def warnings
+      @warnings.nil? ? true : @warnings
+    end
+
+    # Output a warning with [RBLE] prefix, respecting RBLE.warnings flag.
+    # @param message [String] Warning message
+    def rble_warn(message)
+      return unless warnings
+
+      warn "[RBLE] #{message}"
+    end
   end
 
   # Backend selection API - delegates to RBLE::Backend
