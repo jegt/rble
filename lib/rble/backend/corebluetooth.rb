@@ -291,6 +291,8 @@ module RBLE
 
         # Convert byte array to binary string
         (result['value'] || []).map(&:to_i).pack('C*')
+      rescue RBLE::Error
+        raise
       rescue StandardError => e
         raise ReadError, translate_error(e)
       end
@@ -318,6 +320,8 @@ module RBLE
         }, timeout: timeout + 5)
 
         true
+      rescue RBLE::Error
+        raise
       rescue StandardError => e
         raise WriteError, translate_error(e)
       end
@@ -341,6 +345,8 @@ module RBLE
 
         @state_mutex.synchronize { @subscriptions[char_identifier] = callback }
         true
+      rescue RBLE::Error
+        raise
       rescue StandardError => e
         raise NotifyError, translate_error(e)
       end
@@ -589,17 +595,19 @@ module RBLE
         parts
       end
 
-      # Translate error messages to user-friendly format
+      # Translate non-RBLE errors: raise specific RBLE errors for known
+      # patterns, return message string for unknown errors (wrapped by caller).
       # @param error [StandardError] The error to translate
-      # @return [String] Translated error message
+      # @return [String] Translated error message (for unknown patterns)
+      # @raise [NotConnectedError, CharacteristicNotFoundError, ConnectionTimeoutError]
       def translate_error(error)
         case error.message
         when /not connected/i
-          'Device not connected'
+          raise NotConnectedError, 'Device not connected'
         when /characteristic not found/i
-          'Characteristic not found'
+          raise CharacteristicNotFoundError
         when /timeout/i
-          'Operation timed out'
+          raise ConnectionTimeoutError
         else
           error.message
         end
