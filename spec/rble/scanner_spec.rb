@@ -20,6 +20,31 @@ RSpec.describe RBLE::Scanner do
       )
       expect(scanner).to be_a(described_class)
     end
+
+    it "accepts active: parameter" do
+      scanner = described_class.new(active: false)
+      expect(scanner).to be_a(described_class)
+    end
+
+    it "defaults allow_duplicates to false for active scanning" do
+      scanner = described_class.new(active: true)
+      expect(scanner.instance_variable_get(:@allow_duplicates)).to be false
+    end
+
+    it "defaults allow_duplicates to true for passive scanning" do
+      scanner = described_class.new(active: false)
+      expect(scanner.instance_variable_get(:@allow_duplicates)).to be true
+    end
+
+    it "respects explicit allow_duplicates override in passive mode" do
+      scanner = described_class.new(active: false, allow_duplicates: false)
+      expect(scanner.instance_variable_get(:@allow_duplicates)).to be false
+    end
+
+    it "respects explicit allow_duplicates override in active mode" do
+      scanner = described_class.new(active: true, allow_duplicates: true)
+      expect(scanner.instance_variable_get(:@allow_duplicates)).to be true
+    end
   end
 
   describe "#scanning?" do
@@ -109,6 +134,19 @@ RSpec.describe RBLE::Scanner do
         expect(result).to be(scanner)
         expect(devices.size).to be >= stop_after
       end
+
+      it "discovers devices with passive scanning" do
+        skip "Requires Bluetooth hardware" unless bluetooth_available?
+
+        devices = []
+        scanner = described_class.new(active: false, timeout: 5)
+
+        result = scanner.start { |d| devices << d }
+
+        expect(result).to be(scanner)
+        # With allow_duplicates defaulting to true, we should get many callbacks
+        expect(devices.size).to be > 0
+      end
     end
   end
 
@@ -137,6 +175,23 @@ RSpec.describe RBLE do
 
         result = RBLE.scan(timeout: 1) { |d| }
         expect(result).to be_a(RBLE::Scanner)
+      end
+
+      it "receives RuuviTag advertisements in passive mode", :bluetooth do
+        skip "Requires Bluetooth hardware" unless bluetooth_available?
+        skip "Requires RuuviTag in range" if ENV["SKIP_BLE_HARDWARE"]
+
+        ruuvi_company_id = 0x0499
+        found_ruuvi = false
+
+        RBLE.scan(active: false, timeout: 10) do |device|
+          if device.manufacturer_data_bytes(ruuvi_company_id)
+            found_ruuvi = true
+            break
+          end
+        end
+
+        expect(found_ruuvi).to be true
       end
     end
   end
