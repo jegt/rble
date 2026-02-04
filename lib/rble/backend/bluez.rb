@@ -37,7 +37,7 @@ module RBLE
       # @param allow_duplicates [Boolean] Callback on every advertisement
       # @param adapter [String, nil] Adapter name (e.g., "hci0")
       # @yield [Device] Called when device discovered/updated
-      def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, &block)
+      def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, active: true, &block)
         @state_mutex.synchronize do
           raise ScanInProgressError if @scanning
           @scanning = true

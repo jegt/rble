@@ -117,12 +117,18 @@ module RBLE
 
       # Backend::Base implementations
 
-      def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, &block)
+      def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, active: true, &block)
         @state_mutex.synchronize do
           raise ScanInProgressError if @scanning
           @scanning = true
         end
         raise ArgumentError, 'Block required for scan callback' unless block_given?
+
+        unless active
+          warn "[rble] passive scanning (active: false) is not explicitly supported on macOS. " \
+               "CoreBluetooth does not expose active/passive scan control. " \
+               "Scanning will proceed normally."
+        end
 
         @scan_callback = block
 

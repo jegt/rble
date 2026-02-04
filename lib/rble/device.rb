@@ -43,5 +43,12 @@ module RBLE
     def update(**attrs)
       with(**attrs)
     end
+
+    # Get manufacturer data as a binary string for a given company ID
+    # @param company_id [Integer] BLE company identifier (e.g., 0x0499 for Ruuvi)
+    # @return [String, nil] Binary string (ASCII-8BIT) or nil if not present
+    def manufacturer_data_bytes(company_id)
+      manufacturer_data_raw[company_id]
+    end
   end
 end

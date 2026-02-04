@@ -13,7 +13,7 @@ module RBLE
       # @yield [Device] Called when a device is discovered
       # @return [void]
       # @raise [NotImplementedError] if not implemented by subclass
-      def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, &block)
+      def start_scan(service_uuids: nil, allow_duplicates: false, adapter: nil, active: true, &block)
         raise NotImplementedError, "#{self.class}#start_scan must be implemented"
       end
 
