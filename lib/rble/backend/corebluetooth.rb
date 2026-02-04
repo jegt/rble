@@ -230,7 +230,7 @@ module RBLE
       # @return [Array<Hash>] Service data with characteristics
       # @raise [NotConnectedError] if not connected
       # @raise [ServiceDiscoveryError] if discovery fails
-      def discover_services(device_identifier, timeout: 30)
+      def discover_services(device_identifier, connection: nil, timeout: 30)
         connected, cached_services = @state_mutex.synchronize do
           [@connected_devices.key?(device_identifier), @device_services[device_identifier]]
         end
@@ -279,7 +279,7 @@ module RBLE
       # @param timeout [Numeric] Read timeout in seconds
       # @return [String] Binary string (ASCII-8BIT encoding)
       # @raise [ReadError] if read fails
-      def read_characteristic(char_identifier, timeout: 30)
+      def read_characteristic(char_identifier, connection: nil, timeout: 30)
         device_uuid, service_uuid, char_uuid = parse_char_identifier(char_identifier)
 
         result = send_request('read_characteristic', {
@@ -304,7 +304,7 @@ module RBLE
       # @param timeout [Numeric] Write timeout in seconds
       # @return [Boolean] true on success
       # @raise [WriteError] if write fails
-      def write_characteristic(char_identifier, data, response: true, timeout: 30)
+      def write_characteristic(char_identifier, data, connection: nil, response: true, timeout: 30)
         device_uuid, service_uuid, char_uuid = parse_char_identifier(char_identifier)
 
         # Convert string to bytes array if needed
@@ -331,7 +331,7 @@ module RBLE
       # @yield [String] Called with value (binary string) on each notification
       # @return [Boolean] true on success
       # @raise [NotifyError] if subscription fails
-      def subscribe_characteristic(char_identifier, &callback)
+      def subscribe_characteristic(char_identifier, connection: nil, &callback)
         already_subscribed = @state_mutex.synchronize { @subscriptions.key?(char_identifier) }
         return true if already_subscribed
 
@@ -354,7 +354,7 @@ module RBLE
       # Unsubscribe from characteristic notifications
       # @param char_identifier [String] Format: "device_uuid:service_uuid:char_uuid"
       # @return [Boolean] true on success
-      def unsubscribe_characteristic(char_identifier)
+      def unsubscribe_characteristic(char_identifier, connection: nil)
         callback = @state_mutex.synchronize { @subscriptions.delete(char_identifier) }
         return true unless callback
 
@@ -371,6 +371,15 @@ module RBLE
         end
 
         true
+      end
+
+      # Get active subscriptions for a connection
+      # @param connection [Connection] Connection to query
+      # @return [Array<Hash>] Subscription info hashes with :uuid and :path
+      def subscriptions_for_connection(connection)
+        @state_mutex.synchronize do
+          @subscriptions.map { |path, _callback| { path: path, uuid: path.split(':').last } }
+        end
       end
 
       private
@@ -451,7 +460,7 @@ module RBLE
           service_data: parse_service_data(params['service_data']),
           service_uuids: params['service_uuids'] || [],
           tx_power: params['tx_power'],
-          address_type: 'random' # CoreBluetooth doesn't expose this
+          address_type: nil # CoreBluetooth doesn't expose address type
         )
 
         @scan_callback.call(device)
@@ -527,7 +536,7 @@ module RBLE
           raise ConnectionFailed.new(nil, full_message)
         when /connection.*timeout/i, /timed? ?out/i
           raise ConnectionTimeoutError
-        when /service.*discover/i, /discover.*fail/i
+        when /service.*discover/i, /discover.*(?:fail|error)/i, /fail.*discover/i
           raise ServiceDiscoveryError, full_message
         when /characteristic not found/i
           raise CharacteristicNotFoundError
