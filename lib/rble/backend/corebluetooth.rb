@@ -125,9 +125,13 @@ module RBLE
         raise ArgumentError, 'Block required for scan callback' unless block_given?
 
         unless active
-          warn "[rble] passive scanning (active: false) is not explicitly supported on macOS. " \
+          RBLE.rble_warn "passive scanning (active: false) is not explicitly supported on macOS. " \
                "CoreBluetooth does not expose active/passive scan control. " \
                "Scanning will proceed normally."
+        end
+
+        if adapter
+          RBLE.rble_warn "macOS does not support adapter selection. The default adapter will be used."
         end
 
         @scan_callback = block
@@ -383,7 +387,7 @@ module RBLE
               end
             rescue JSON::ParserError
               # Log to stderr, don't crash
-              warn "[rble] Invalid JSON from subprocess: #{line}"
+              warn "[RBLE] Invalid JSON from subprocess: #{line}"
             end
           end
         rescue IOError
@@ -406,7 +410,7 @@ module RBLE
               # Expected when user's callback uses `break` to exit early from scanning
               # This is normal behavior, not an error
             rescue StandardError => e
-              warn "[rble] Event processor error: #{e.message}"
+              warn "[RBLE] Event processor error: #{e.message}"
             end
             sleep 0.01 # Small sleep to prevent CPU spinning
           end
