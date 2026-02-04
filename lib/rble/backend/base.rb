@@ -72,10 +72,11 @@ module RBLE
       # Discover GATT services on a connected device
       #
       # @param device_path [String] D-Bus device path
+      # @param connection [Connection, nil] Connection for D-Bus session routing (BlueZ only)
       # @param timeout [Numeric] Discovery timeout in seconds
       # @return [Array<Service>] Discovered services
       # @raise [NotImplementedError] if not implemented by subclass
-      def discover_services(device_path, timeout: 30)
+      def discover_services(device_path, connection: nil, timeout: 30)
         raise NotImplementedError, "#{self.class}#discover_services must be implemented"
       end
 
@@ -94,10 +95,11 @@ module RBLE
       # Read a characteristic value
       #
       # @param char_path [String] D-Bus characteristic path
+      # @param connection [Connection, nil] Connection for D-Bus session routing (BlueZ only)
       # @param timeout [Numeric] Read timeout in seconds
       # @return [String] Binary string (ASCII-8BIT encoding)
       # @raise [NotImplementedError] if not implemented by subclass
-      def read_characteristic(char_path, timeout: 30)
+      def read_characteristic(char_path, connection: nil, timeout: 30)
         raise NotImplementedError, "#{self.class}#read_characteristic must be implemented"
       end
 
@@ -105,31 +107,42 @@ module RBLE
       #
       # @param char_path [String] D-Bus characteristic path
       # @param data [String, Array<Integer>] Data to write
+      # @param connection [Connection, nil] Connection for D-Bus session routing (BlueZ only)
       # @param response [Boolean] Wait for write response (true = write with response)
       # @param timeout [Numeric] Write timeout in seconds
       # @return [Boolean] true on success
       # @raise [NotImplementedError] if not implemented by subclass
-      def write_characteristic(char_path, data, response: true, timeout: 30)
+      def write_characteristic(char_path, data, connection: nil, response: true, timeout: 30)
         raise NotImplementedError, "#{self.class}#write_characteristic must be implemented"
       end
 
       # Subscribe to characteristic notifications
       #
       # @param char_path [String] D-Bus characteristic path
+      # @param connection [Connection, nil] Connection for D-Bus session routing (BlueZ only)
       # @yield [String] Called with value (binary string) on each notification
       # @return [Boolean] true on success
       # @raise [NotImplementedError] if not implemented by subclass
-      def subscribe_characteristic(char_path, &)
+      def subscribe_characteristic(char_path, connection: nil, &)
         raise NotImplementedError, "#{self.class}#subscribe_characteristic must be implemented"
       end
 
       # Unsubscribe from characteristic notifications
       #
       # @param char_path [String] D-Bus characteristic path
+      # @param connection [Connection, nil] Connection for D-Bus session routing (BlueZ only)
       # @return [Boolean] true on success
       # @raise [NotImplementedError] if not implemented by subclass
-      def unsubscribe_characteristic(char_path)
+      def unsubscribe_characteristic(char_path, connection: nil)
         raise NotImplementedError, "#{self.class}#unsubscribe_characteristic must be implemented"
+      end
+
+      # Get active subscriptions for a connection
+      #
+      # @param connection [Connection] Connection to query
+      # @return [Array<Hash>] Subscription info hashes with :uuid and :path
+      def subscriptions_for_connection(connection)
+        []
       end
     end
   end
