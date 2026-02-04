@@ -34,13 +34,15 @@ module RBLE
     #
     # @param service_uuids [Array<String>, nil] Filter by service UUIDs
     # @param timeout [Numeric, nil] Stop after N seconds (nil = manual stop only)
-    # @param allow_duplicates [Boolean] Callback on every advertisement
+    # @param allow_duplicates [Boolean, nil] Callback on every advertisement (nil = auto based on active:)
     # @param adapter [String, nil] Bluetooth adapter name (e.g., "hci0")
+    # @param active [Boolean] Use active scanning (true) or passive scanning (false)
     # @param on_stop [Proc, nil] Callback when scan stops
-    def initialize(service_uuids: nil, timeout: nil, allow_duplicates: false, adapter: nil, on_stop: nil)
+    def initialize(service_uuids: nil, timeout: nil, allow_duplicates: nil, adapter: nil, active: true, on_stop: nil)
       @service_uuids = service_uuids
       @timeout = timeout
-      @allow_duplicates = allow_duplicates
+      @allow_duplicates = allow_duplicates.nil? ? !active : allow_duplicates
+      @active = active
       @adapter = adapter
       @on_stop = on_stop
       @backend = nil
@@ -68,6 +70,7 @@ module RBLE
           service_uuids: @service_uuids,
           allow_duplicates: @allow_duplicates,
           adapter: @adapter,
+          active: @active,
           &block
         )
 
@@ -130,8 +133,9 @@ module RBLE
     #
     # @param service_uuids [Array<String>, nil] Filter by service UUIDs
     # @param timeout [Numeric, nil] Stop after N seconds
-    # @param allow_duplicates [Boolean] Callback on every advertisement
+    # @param allow_duplicates [Boolean, nil] Callback on every advertisement (nil = auto based on active:)
     # @param adapter [String, nil] Bluetooth adapter name
+    # @param active [Boolean] Use active scanning (true) or passive scanning (false)
     # @param on_stop [Proc, nil] Callback when scan stops
     # @yield [Device] Called when device discovered
     # @return [Scanner] Scanner instance for stop control
@@ -139,12 +143,13 @@ module RBLE
     # @example
     #   RBLE.scan(timeout: 5) { |d| puts d.name }
     #
-    def scan(service_uuids: nil, timeout: nil, allow_duplicates: false, adapter: nil, on_stop: nil, &block)
+    def scan(service_uuids: nil, timeout: nil, allow_duplicates: nil, adapter: nil, active: true, on_stop: nil, &block)
       scanner = Scanner.new(
         service_uuids: service_uuids,
         timeout: timeout,
         allow_duplicates: allow_duplicates,
         adapter: adapter,
+        active: active,
         on_stop: on_stop
       )
       scanner.start(&block)
