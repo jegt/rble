@@ -57,7 +57,7 @@ module RBLE
       def async_connect(device_path, wait_for_services: true, timeout: DEFAULT_CONNECT_TIMEOUT)
         address = extract_address_from_path(device_path)
         deadline = Time.now + timeout
-        warn "      [rble] async_connect timeout=#{timeout}s deadline=#{deadline.strftime('%H:%M:%S')}" if RBLE.trace
+        warn "      [RBLE] async_connect timeout=#{timeout}s deadline=#{deadline.strftime('%H:%M:%S')}" if RBLE.trace
 
         proxy = async_introspect(device_path, timeout: remaining_timeout(deadline, timeout))
         device_iface = proxy[DEVICE_INTERFACE]
