@@ -506,14 +506,27 @@ module RBLE
         error = response[:error]
         message = error['message'] || error[:message]
         platform_error = (error['data'] || error[:data])&.dig('platform_error')
+        full_message = platform_error ? "#{message} (#{platform_error})" : message
 
         case message
         when /not powered on/i
           raise BluetoothOffError
         when /unauthorized/i
           raise PermissionError, 'access Bluetooth on macOS'
+        when /not connected/i
+          raise NotConnectedError, full_message
+        when /device not found/i, /no peripheral/i, /unknown device/i
+          raise DeviceNotFoundError.new(full_message)
+        when /connection.*(failed|refused)/i
+          raise ConnectionFailed.new(nil, full_message)
+        when /connection.*timeout/i, /timed? ?out/i
+          raise ConnectionTimeoutError
+        when /service.*discover/i, /discover.*fail/i
+          raise ServiceDiscoveryError, full_message
+        when /characteristic not found/i
+          raise CharacteristicNotFoundError
         else
-          raise Error, "#{message}#{platform_error ? " (#{platform_error})" : ''}"
+          raise Error, full_message
         end
       end
 
