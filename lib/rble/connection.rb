@@ -64,7 +64,9 @@ module RBLE
       setup_dbus_session if bluez_backend?
 
       # Transition to connected (connection already established by RBLE.connect)
+      warn "      [rble] Connection.new: transitioning to connected..." if RBLE.trace
       transition_to(:connected)
+      warn "      [rble] Connection.new: done" if RBLE.trace
     end
 
     # Get the current connection state
@@ -339,18 +341,58 @@ module RBLE
     end
 
     # Setup D-Bus session for BlueZ backend
-    # Creates a new DBusSession, connects, and starts event loop
+    # Creates a new DBusSession, connects, sets up disconnect monitoring, and starts event loop
+    # Signal handlers MUST be registered BEFORE starting the event loop to avoid
+    # blocking on synchronous AddMatch calls while the loop is running.
     # @return [void]
     # @raise [Error] if session creation fails
     def setup_dbus_session
+      warn "      [rble] Connection: creating DBusSession..." if RBLE.trace
       @dbus_session = RBLE::BlueZ::DBusSession.new
       @dbus_session.connect
+
+      # Register disconnect signal handler BEFORE starting event loop
+      # This avoids the 15-20s blocking that occurs when on_signal is called
+      # while the event loop is already running
+      warn "      [rble] Connection: setting up disconnect handler..." if RBLE.trace
+      setup_disconnect_signal_handler
+
+      warn "      [rble] Connection: starting event loop..." if RBLE.trace
       @dbus_session.start_event_loop
+      warn "      [rble] Connection: setup complete" if RBLE.trace
     rescue StandardError => e
       # Clean up partial session on failure
       @dbus_session&.disconnect
       @dbus_session = nil
       raise Error, "Failed to create D-Bus session: #{e.message}"
+    end
+
+    # Setup PropertiesChanged signal handler for disconnect detection
+    # Must be called BEFORE starting the event loop
+    # @return [void]
+    def setup_disconnect_signal_handler
+      return unless @dbus_session
+
+      # Get device object - use synchronous introspect since event loop not running yet
+      warn "      [rble] Connection: introspecting device..." if RBLE.trace
+      start = Time.now
+      device_obj = @dbus_session.object(@device_path)
+      device_obj.introspect
+      warn "      [rble] Connection: introspect done (#{(Time.now - start).round(2)}s)" if RBLE.trace
+      props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
+
+      warn "      [rble] Connection: registering on_signal..." if RBLE.trace
+      start = Time.now
+      props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+        next unless interface == RBLE::BlueZ::DEVICE_INTERFACE
+        next unless changed.key?('Connected')
+
+        if changed['Connected'] == false
+          # Device disconnected - notify via backend
+          @backend.send(:handle_unexpected_disconnect, @device_path) if @backend.respond_to?(:handle_unexpected_disconnect, true)
+        end
+      end
+      warn "      [rble] Connection: on_signal done (#{(Time.now - start).round(2)}s)" if RBLE.trace
     end
 
     # Destroy D-Bus session
@@ -473,14 +515,18 @@ module RBLE
         raise
       end
 
+      warn "      [rble] RBLE.connect: creating Connection..." if RBLE.trace
       connection = Connection.new(
         address: address,
         device_path: device_path,
         backend: backend
       )
+      warn "      [rble] RBLE.connect: Connection created" if RBLE.trace
 
       # Register connection for disconnect monitoring (BlueZ backend)
+      warn "      [rble] RBLE.connect: registering connection..." if RBLE.trace
       backend.register_connection(device_path, connection) if backend.respond_to?(:register_connection)
+      warn "      [rble] RBLE.connect: done" if RBLE.trace
 
       connection
     end

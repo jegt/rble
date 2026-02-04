@@ -56,13 +56,15 @@ module RBLE
           @scan_session = RBLE::BlueZ::DBusSession.new
           @scan_session.connect
 
-          # Start event loop FIRST - async operations need it running
-          # to process D-Bus callbacks
+          # Setup signal handlers BEFORE starting event loop to avoid blocking
+          # on_signal does synchronous AddMatch which blocks if event loop is running
+          setup_scan_signal_handlers(@scan_session)
+
+          # Start event loop - async operations need it running to process D-Bus callbacks
           @scan_session.start_event_loop
 
-          # Setup adapter and signal handlers (uses async introspection)
+          # Setup adapter (uses async introspection which needs event loop)
           @scan_adapter_path = setup_adapter_for_scan(@scan_session, adapter)
-          setup_scan_signal_handlers(@scan_session)
           start_discovery_on_session(@scan_session, service_uuids: service_uuids, allow_duplicates: allow_duplicates)
 
           # Process existing devices (already discovered before scan started)
@@ -226,7 +228,8 @@ module RBLE
       # @return [void]
       def register_connection(device_path, connection)
         @state_mutex.synchronize { @connection_objects[device_path] = connection }
-        setup_disconnect_monitoring(device_path, connection)
+        # Disconnect monitoring is now set up in Connection#setup_dbus_session
+        # BEFORE the event loop starts, to avoid blocking on_signal calls
       end
 
       # Unregister a Connection from disconnect monitoring
@@ -419,20 +422,25 @@ module RBLE
 
         # Subscribe to PropertiesChanged signal for value updates
         # Events are enqueued to the Connection's event loop
-        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
-          next unless interface == RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE
-          next unless changed.key?('Value')
+        # NOTE: on_signal does synchronous AddMatch which can block if event loop is running.
+        # We don't wait for registration to complete - notifications may be missed briefly
+        # but this avoids blocking the subscribe call for 0.5-1s
+        Thread.new do
+          props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+            next unless interface == RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE
+            next unless changed.key?('Value')
 
-          # Convert value bytes to binary string
-          value = changed['Value'].map(&:to_i).pack('C*')
+            # Convert value bytes to binary string
+            value = changed['Value'].map(&:to_i).pack('C*')
 
-          RBLE.logger&.debug("[RBLE] Notification received: #{char_path} (#{value.bytesize} bytes)")
-          RBLE.logger&.debug("[RBLE]   Data: #{value.bytes.map { |b| format('%02x', b) }.join(' ')}")
+            RBLE.logger&.debug("[RBLE] Notification received: #{char_path} (#{value.bytesize} bytes)")
+            RBLE.logger&.debug("[RBLE]   Data: #{value.bytes.map { |b| format('%02x', b) }.join(' ')}")
 
-          # Enqueue to Connection's event loop for thread-safe callback dispatch
-          # Using Connection's dbus_session ensures notifications are delivered
-          # even when scan session is destroyed
-          session.enqueue(:notification, char_path, { value: value, callback: callback })
+            # Enqueue to Connection's event loop for thread-safe callback dispatch
+            # Using Connection's dbus_session ensures notifications are delivered
+            # even when scan session is destroyed
+            session.enqueue(:notification, char_path, { value: value, callback: callback })
+          end
         end
 
         # Store subscription for tracking (thread-safe)

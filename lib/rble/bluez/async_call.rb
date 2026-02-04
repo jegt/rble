@@ -51,11 +51,13 @@ module RBLE
         @pending_queues&.push(queue)
 
         RBLE.logger&.debug("[RBLE] #{request_id} Starting #{operation}")
+        warn "      [rble] #{request_id} #{operation} timeout=#{timeout.round(2)}s" if RBLE.trace
 
         yield(queue, request_id, cancelled)
 
         result = queue.pop(timeout: timeout)
         elapsed = Time.now - start_time
+        warn "      [rble] #{request_id} #{operation} -> #{result.nil? ? 'TIMEOUT' : 'ok'} (#{elapsed.round(2)}s)" if RBLE.trace
 
         if result.nil?
           cancelled[0] = true

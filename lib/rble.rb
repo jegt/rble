@@ -17,6 +17,11 @@ module RBLE
     #   RBLE.logger = Logger.new(STDOUT)
     #   RBLE.logger.level = Logger::DEBUG
     attr_accessor :logger
+
+    # Enable trace-level output for connection timing and D-Bus call flow
+    # @example
+    #   RBLE.trace = true
+    attr_accessor :trace
   end
 
   # Backend selection API - delegates to RBLE::Backend

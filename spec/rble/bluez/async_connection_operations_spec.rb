@@ -84,11 +84,13 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       expect(result).to eq(true)
     end
 
-    it 'uses 30s default timeout' do
-      expect(subject_instance).to receive(:async_introspect)
-        .with(device_path, timeout: 30)
-        .and_return(mock_proxy)
-        .at_least(:once)
+    it 'uses 30s default timeout (deadline-based)' do
+      # With deadline-based timeouts, the first call gets ~30s, subsequent calls get the remaining time
+      captured_timeouts = []
+      allow(subject_instance).to receive(:async_introspect).and_wrap_original do |original, *args, **kwargs|
+        captured_timeouts << kwargs[:timeout]
+        mock_proxy
+      end
 
       allow(mock_device_iface).to receive(:Connect) do |&block|
         block.call(nil)
@@ -115,6 +117,9 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
         end
 
       subject_instance.async_connect(device_path)
+
+      # First call should get approximately 30s (default timeout)
+      expect(captured_timeouts.first).to be_within(1).of(30)
     end
 
     it 'waits for ServicesResolved by default' do
@@ -292,17 +297,21 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       expect(result).to eq(true)
     end
 
-    it 'uses 5s default timeout' do
-      expect(subject_instance).to receive(:async_introspect)
-        .with(device_path, timeout: 5)
-        .and_return(mock_proxy)
-        .at_least(:once)
+    it 'uses 5s default timeout (deadline-based)' do
+      captured_timeouts = []
+      allow(subject_instance).to receive(:async_introspect).and_wrap_original do |_original, *args, **kwargs|
+        captured_timeouts << kwargs[:timeout]
+        mock_proxy
+      end
 
       allow(mock_device_iface).to receive(:Disconnect) do |&block|
         block.call(nil)
       end
 
       subject_instance.async_disconnect(device_path)
+
+      # First call should get approximately 5s (default timeout)
+      expect(captured_timeouts.first).to be_within(0.5).of(5)
     end
 
     it 'is idempotent: returns true if not connected' do

@@ -56,13 +56,20 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
       expect(result.encoding).to eq(Encoding::ASCII_8BIT)
     end
 
-    it 'uses async_introspect to get cached proxy' do
-      expect(subject_instance).to receive(:async_introspect).with(char_path, timeout: 5).and_return(mock_proxy)
+    it 'uses async_introspect to get cached proxy (deadline-based)' do
+      captured_timeouts = []
+      allow(subject_instance).to receive(:async_introspect).and_wrap_original do |_original, *args, **kwargs|
+        captured_timeouts << kwargs[:timeout]
+        mock_proxy
+      end
       allow(mock_char_iface).to receive(:ReadValue) do |_options, &block|
         block.call(mock_dbus_reply([65])) # "A"
       end
 
       subject_instance.async_read_value(char_path)
+
+      # First call should get approximately 5s (default timeout)
+      expect(captured_timeouts.first).to be_within(0.5).of(5)
     end
 
     it 'raises TimeoutError on timeout' do
@@ -143,16 +150,21 @@ RSpec.describe RBLE::BlueZ::AsyncGattOperations do
       expect(captured_options['type'].value).to eq('command')
     end
 
-    it 'uses 1s timeout for write-without-response' do
-      expect(subject_instance).to receive(:async_introspect)
-        .with(char_path, timeout: 1)
-        .and_return(mock_proxy)
+    it 'uses 1s timeout for write-without-response (deadline-based)' do
+      captured_timeouts = []
+      allow(subject_instance).to receive(:async_introspect).and_wrap_original do |_original, *args, **kwargs|
+        captured_timeouts << kwargs[:timeout]
+        mock_proxy
+      end
 
       allow(mock_char_iface).to receive(:WriteValue) do |_bytes, _options, &block|
         block.call(mock_dbus_reply(nil))
       end
 
       subject_instance.async_write_value(char_path, test_bytes, response: false)
+
+      # First call should get approximately 1s (write-without-response timeout)
+      expect(captured_timeouts.first).to be_within(0.1).of(1)
     end
 
     it 'raises WriteError with UUID on D-Bus error' do

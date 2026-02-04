@@ -49,26 +49,28 @@ module RBLE
       #
       # @param device_path [String] D-Bus device path
       # @param wait_for_services [Boolean] Wait for GATT services to be discovered (default: true)
-      # @param timeout [Numeric] Timeout in seconds (default: 30)
+      # @param timeout [Numeric] Total timeout in seconds for the entire connection process (default: 30)
       # @return [Boolean] true on success
       # @raise [TimeoutError] if connection times out
       # @raise [ConnectionFailed] if connection fails
       # @raise [AdapterNotFoundError] if adapter not ready
       def async_connect(device_path, wait_for_services: true, timeout: DEFAULT_CONNECT_TIMEOUT)
         address = extract_address_from_path(device_path)
+        deadline = Time.now + timeout
+        warn "      [rble] async_connect timeout=#{timeout}s deadline=#{deadline.strftime('%H:%M:%S')}" if RBLE.trace
 
-        proxy = async_introspect(device_path, timeout: timeout)
+        proxy = async_introspect(device_path, timeout: remaining_timeout(deadline, timeout))
         device_iface = proxy[DEVICE_INTERFACE]
         props_iface = proxy[PROPERTIES_INTERFACE]
 
         # Idempotent: check if already connected (use async to avoid deadlock)
-        connected = async_get_property(device_path, DEVICE_INTERFACE, 'Connected', timeout: timeout)
+        connected = async_get_property(device_path, DEVICE_INTERFACE, 'Connected', timeout: remaining_timeout(deadline, timeout))
         if connected
           # If waiting for services and not resolved, wait
           if wait_for_services
-            services_resolved = async_get_property(device_path, DEVICE_INTERFACE, 'ServicesResolved', timeout: timeout)
+            services_resolved = async_get_property(device_path, DEVICE_INTERFACE, 'ServicesResolved', timeout: remaining_timeout(deadline, timeout))
             unless services_resolved
-              wait_for_services_resolved(props_iface, timeout: timeout)
+              wait_for_services_resolved(props_iface, timeout: remaining_timeout(deadline, timeout))
               # Delay to allow BlueZ to fully export GATT services to D-Bus
               sleep(SERVICES_RESOLVED_DELAY)
             end
@@ -90,7 +92,8 @@ module RBLE
 
         begin
           # Call Connect asynchronously
-          async_call("Connect(#{address})", timeout: timeout) do |queue, _request_id, cancelled|
+          connect_timeout = remaining_timeout(deadline, timeout)
+          async_call("Connect(#{address})", timeout: connect_timeout) do |queue, _request_id, cancelled|
             device_iface.Connect do |reply|
               next if cancelled[0]  # Discard late callback
               if reply.is_a?(DBus::Error)
@@ -105,9 +108,10 @@ module RBLE
           if wait_for_services && services_queue
             # Check if already resolved (race condition protection)
             # Use async_get_property to avoid deadlock
-            services_resolved = async_get_property(device_path, DEVICE_INTERFACE, 'ServicesResolved', timeout: timeout)
+            services_resolved = async_get_property(device_path, DEVICE_INTERFACE, 'ServicesResolved', timeout: remaining_timeout(deadline, timeout))
             unless services_resolved
-              result = services_queue.pop(timeout: timeout)
+              services_timeout = remaining_timeout(deadline, timeout)
+              result = services_queue.pop(timeout: services_timeout)
               raise TimeoutError.new('ServicesResolved', timeout) if result.nil?
             end
             # Delay to allow BlueZ to fully export GATT services to D-Bus
@@ -126,20 +130,21 @@ module RBLE
       # Async disconnect from a BLE device
       #
       # @param device_path [String] D-Bus device path
-      # @param timeout [Numeric] Timeout in seconds (default: 5)
+      # @param timeout [Numeric] Total timeout in seconds for the entire disconnect operation (default: 5)
       # @return [Boolean] true on success
       # @raise [TimeoutError] if disconnect times out
       def async_disconnect(device_path, timeout: DEFAULT_DISCONNECT_TIMEOUT)
         address = extract_address_from_path(device_path)
+        deadline = Time.now + timeout
 
-        proxy = async_introspect(device_path, timeout: timeout)
+        proxy = async_introspect(device_path, timeout: remaining_timeout(deadline, timeout))
         device_iface = proxy[DEVICE_INTERFACE]
 
         # Idempotent: check if not connected (use async to avoid deadlock)
-        connected = async_get_property(device_path, DEVICE_INTERFACE, 'Connected', timeout: timeout)
+        connected = async_get_property(device_path, DEVICE_INTERFACE, 'Connected', timeout: remaining_timeout(deadline, timeout))
         return true unless connected
 
-        async_call("Disconnect(#{address})", timeout: timeout) do |queue, _request_id, cancelled|
+        async_call("Disconnect(#{address})", timeout: remaining_timeout(deadline, timeout)) do |queue, _request_id, cancelled|
           device_iface.Disconnect do |reply|
             next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
@@ -164,25 +169,27 @@ module RBLE
       # @option filter [Integer] :rssi Minimum RSSI value
       # @option filter [Integer] :pathloss Maximum path loss
       # @option filter [Boolean] :duplicate_data Report duplicate advertisements
-      # @param timeout [Numeric] Timeout in seconds (default: 10)
+      # @param timeout [Numeric] Total timeout in seconds for the entire operation (default: 10)
       # @return [Boolean] true on success
       # @raise [TimeoutError] if operation times out
       # @raise [ScanError] if discovery fails
       # @raise [AdapterNotFoundError] if adapter not ready
       def async_start_discovery(adapter_path, filter: {}, timeout: DEFAULT_DISCOVERY_TIMEOUT)
-        proxy = async_introspect(adapter_path, timeout: timeout)
+        deadline = Time.now + timeout
+
+        proxy = async_introspect(adapter_path, timeout: remaining_timeout(deadline, timeout))
         adapter_iface = proxy[ADAPTER_INTERFACE]
 
         # Idempotent: check if already discovering (use async to avoid deadlock)
-        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: timeout)
+        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: remaining_timeout(deadline, timeout))
         return true if discovering
 
         # Set discovery filter first if any options provided
         unless filter.empty?
-          async_set_discovery_filter(adapter_path, adapter_iface, filter, timeout: timeout)
+          async_set_discovery_filter(adapter_path, adapter_iface, filter, timeout: remaining_timeout(deadline, timeout))
         end
 
-        async_call("StartDiscovery(#{adapter_path})", timeout: timeout) do |queue, _request_id, cancelled|
+        async_call("StartDiscovery(#{adapter_path})", timeout: remaining_timeout(deadline, timeout)) do |queue, _request_id, cancelled|
           adapter_iface.StartDiscovery do |reply|
             next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
@@ -205,18 +212,20 @@ module RBLE
       # Async stop discovery on an adapter
       #
       # @param adapter_path [String] D-Bus adapter path
-      # @param timeout [Numeric] Timeout in seconds (default: 10)
+      # @param timeout [Numeric] Total timeout in seconds for the entire operation (default: 10)
       # @return [Boolean] true on success
       # @raise [TimeoutError] if operation times out
       def async_stop_discovery(adapter_path, timeout: DEFAULT_DISCOVERY_TIMEOUT)
-        proxy = async_introspect(adapter_path, timeout: timeout)
+        deadline = Time.now + timeout
+
+        proxy = async_introspect(adapter_path, timeout: remaining_timeout(deadline, timeout))
         adapter_iface = proxy[ADAPTER_INTERFACE]
 
         # Idempotent: check if not discovering (use async to avoid deadlock)
-        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: timeout)
+        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: remaining_timeout(deadline, timeout))
         return true unless discovering
 
-        async_call("StopDiscovery(#{adapter_path})", timeout: timeout) do |queue, _request_id, cancelled|
+        async_call("StopDiscovery(#{adapter_path})", timeout: remaining_timeout(deadline, timeout)) do |queue, _request_id, cancelled|
           adapter_iface.StopDiscovery do |reply|
             next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
@@ -312,6 +321,17 @@ module RBLE
       end
 
       private
+
+      # Calculate remaining timeout from deadline, raising TimeoutError if expired
+      # @param deadline [Time] Absolute deadline
+      # @param original_timeout [Numeric] Original timeout for error message
+      # @return [Numeric] Remaining seconds (minimum 0.1 to allow one more attempt)
+      # @raise [TimeoutError] if deadline has passed
+      def remaining_timeout(deadline, original_timeout)
+        remaining = deadline - Time.now
+        raise TimeoutError.new('Connect', original_timeout) if remaining <= 0
+        [remaining, 0.1].max
+      end
 
       # Wait for ServicesResolved property to become true
       def wait_for_services_resolved(props_iface, timeout:)
