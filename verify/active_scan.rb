@@ -78,6 +78,10 @@ rescue Timeout::Error
 rescue => e
   $stderr.puts "ERROR: #{e.class}: #{e.message}"
 ensure
+  # Allow GC to finalize D-Bus socket objects before measuring FDs
+  GC.start
+  sleep 0.5
+
   elapsed = (Time.now - start_time).round(1)
   final_threads = thread_count
   final_fds = fd_count

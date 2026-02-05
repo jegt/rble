@@ -223,6 +223,10 @@ ensure
   subscribed_char&.unsubscribe rescue nil
   conn&.disconnect rescue nil
 
+  # Allow GC to finalize D-Bus socket objects before measuring FDs
+  GC.start
+  sleep 0.5
+
   elapsed = (Time.now - start_time).round(1)
   final_res = resource_snapshot
   thread_delta, fd_delta = print_summary(status, elapsed, metrics, baseline, final_res)
