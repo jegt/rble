@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Prevent broken pipe crash when piped to head/less
+trap(:PIPE, "SYSTEM_DEFAULT")
+
+# Flush immediately for streaming output
+$stdout.sync = true
+$stderr.sync = true
+
+require "rble/cli"
+
+RBLE::CLI::Main.start(ARGV)

@@ -19,12 +19,14 @@ Gem::Specification.new do |spec|
   spec.metadata['changelog_uri'] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata['rubygems_mfa_required'] = 'true'
 
-  # Include lib/ and ext/ but exclude build artifacts
-  spec.files = Dir['lib/**/*', 'LICENSE.txt', 'README.md', 'CHANGELOG.md'] +
+  # Include lib/, ext/, and exe/ but exclude build artifacts
+  spec.files = Dir['lib/**/*', 'exe/*', 'LICENSE.txt', 'README.md', 'CHANGELOG.md'] +
                Dir['ext/macos_ble/Package.swift', 'ext/macos_ble/Sources/**/*.swift'] +
                ['ext/macos_ble/extconf.rb'] +
                Dir['ext/linux_ble/Package.swift', 'ext/linux_ble/Sources/**/*.swift'] +
                ['ext/linux_ble/extconf.rb']
+  spec.bindir = 'exe'
+  spec.executables = ['rble']
   spec.require_paths = ['lib']
 
   # Build Swift helpers during gem install (each skips on wrong platform)
@@ -35,4 +37,5 @@ Gem::Specification.new do |spec|
 
   # Runtime dependencies
   spec.add_dependency 'ruby-dbus', '~> 0.25'
+  spec.add_dependency 'thor', '~> 1.3'
 end
