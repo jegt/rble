@@ -12,6 +12,7 @@ module RBLE
     GATT_DESCRIPTOR_INTERFACE = 'org.bluez.GattDescriptor1'
     PROPERTIES_INTERFACE = 'org.freedesktop.DBus.Properties'
     OBJECT_MANAGER_INTERFACE = 'org.freedesktop.DBus.ObjectManager'
+    AGENT_MANAGER_INTERFACE = 'org.bluez.AgentManager1'
   end
 end
 
@@ -23,3 +24,5 @@ require_relative 'bluez/device'
 require_relative 'bluez/gatt_service'
 require_relative 'bluez/gatt_operation_queue'
 require_relative 'bluez/retry_policy'
+require_relative 'bluez/pairing_agent'
+require_relative 'bluez/pairing_session'
