@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-02-05
+
+### Added
+
+- **CLI Tool** — `rble` command-line executable for BLE operations from the terminal
+- `rble scan` — discover BLE devices with `--timeout`, `--continuous`, `--passive`, `--name`, `--rssi` filters
+- `rble show <mac>` — connect and display GATT service/characteristic tree with human-readable names
+- `rble status` — show Bluetooth adapter info and powered state
+- `rble doctor` — diagnose 8 common Bluetooth problems with actionable fix commands
+- `rble adapter list/power/discoverable/pairable/name` — manage adapter settings
+- `rble pair <mac>` / `rble unpair <mac>` / `rble paired` — BLE device pairing management
+- `rble read <mac> <char>` — read characteristic values with smart formatting
+- `rble write <mac> <char> <value>` — write to characteristics with 8 type encoders (hex, string, uint8/16/32, int8/16/32)
+- `rble monitor <mac> <char>` — subscribe and stream notifications with reconnect support
+- `--json` flag on all commands for structured NDJSON output
+- GATT UUID database with 175 entries (70 services, 90 characteristics, 15 descriptors) at `RBLE::GATT::UUIDDatabase`
+- 15 smart value parsers for known BLE characteristic types (heart rate, battery, temperature, blood pressure, etc.)
+- IEEE 11073 FLOAT/SFLOAT decoding for medical device data
+- Hex dump formatter for unknown characteristic types
+- PairingAgent and PairingSession infrastructure for BlueZ pairing operations
+- Thor ~> 1.3 as CLI framework dependency
+
 ## [0.5.0] - 2026-02-05
 
 ### Added

@@ -1,15 +1,17 @@
 # RBLE
 
-Reliable BLE communication for Ruby - scanning, connections, and GATT operations on Linux and macOS.
+Reliable BLE communication for Ruby — scanning, connections, and GATT operations on Linux and macOS. Includes a standalone `rble` CLI tool.
 
 ## Features
 
-- **Device Scanning** - Discover BLE devices with filtering by service UUID
+- **CLI Tool** - `rble` command for scanning, inspecting, reading, writing, and monitoring BLE devices from the terminal
+- **Device Scanning** - Discover BLE devices with filtering by service UUID, name, RSSI
 - **GATT Connections** - Connect to devices and discover services/characteristics
 - **Read/Write** - Read and write characteristic values with timeout support
-- **Notifications** - Subscribe to characteristic value changes
+- **Notifications** - Subscribe to characteristic value changes with smart formatting
 - **Cross-Platform** - Works on Linux (BlueZ/D-Bus) and macOS (CoreBluetooth)
 - **Disconnect Detection** - Callbacks for connection state changes and disconnections
+- **GATT UUID Database** - 175 human-readable names for standard BLE services and characteristics
 
 ## Requirements
 
@@ -69,6 +71,41 @@ RBLE.scan(timeout: 5) do |device|
   puts "Found: #{device.name || 'Unknown'} (#{device.address})"
 end
 ```
+
+## CLI Tool
+
+RBLE includes a standalone command-line tool for BLE operations without writing Ruby code:
+
+```bash
+# Discover nearby devices
+rble scan
+rble scan --timeout 30 --name Polar --rssi -70
+
+# Check Bluetooth health
+rble status
+rble doctor
+
+# Inspect a device's GATT services
+rble show AA:BB:CC:DD:EE:FF
+
+# Read/write characteristics
+rble read AA:BB:CC:DD:EE:FF 2a19        # Battery Level → "95%"
+rble write AA:BB:CC:DD:EE:FF 2a00 "MyDevice"
+
+# Stream notifications
+rble monitor AA:BB:CC:DD:EE:FF 2a37      # Heart Rate → "72 bpm"
+
+# Manage adapter
+rble adapter list
+rble adapter power on
+
+# Pairing
+rble pair AA:BB:CC:DD:EE:FF
+rble paired
+rble unpair AA:BB:CC:DD:EE:FF
+```
+
+All commands support `--json` for structured NDJSON output and `--help` for usage details.
 
 ## Rake Tasks
 
