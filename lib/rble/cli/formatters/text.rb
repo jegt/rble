@@ -56,6 +56,16 @@ module RBLE
           # Text mode: status already printed on stderr, no stdout output needed
         end
 
+        def read_value(address:, uuid:, name:, raw:, formatted:)
+          short = RBLE::GATT::UUIDDatabase.extract_short_uuid(uuid)
+          label = name ? "#{name} (#{short})" : short
+          puts "#{label}: #{formatted}"
+        end
+
+        def write_result(address:, uuid:, name:, success:, verified: nil, written_bytes: nil)
+          # Text mode: status already printed on stderr, no stdout output needed
+        end
+
         def show_tree(tree_data)
           header = if tree_data[:name]
                      "#{tree_data[:name]} (#{tree_data[:address]})"

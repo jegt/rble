@@ -39,6 +39,32 @@ module RBLE
           })
         end
 
+        def read_value(address:, uuid:, name:, raw:, formatted:)
+          puts JSON.generate({
+            address: address,
+            characteristic: {
+              uuid: uuid,
+              name: name,
+              value: formatted,
+              raw: raw.bytes
+            }
+          })
+        end
+
+        def write_result(address:, uuid:, name:, success:, verified: nil, written_bytes: nil)
+          output = {
+            address: address,
+            characteristic: {
+              uuid: uuid,
+              name: name
+            },
+            status: success ? "ok" : "error"
+          }
+          output[:written] = written_bytes.bytes if written_bytes
+          output[:verified] = verified
+          puts JSON.generate(output)
+        end
+
         def show_tree(tree_data)
           output = {
             address: tree_data[:address],
