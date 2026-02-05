@@ -14,6 +14,7 @@
 # Usage: ruby verify/stream.rb
 
 require_relative '../lib/rble'
+require 'timeout'
 
 SCRIPT_NAME = "verify/stream"
 SCAN_TIMEOUT = 15

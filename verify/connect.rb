@@ -15,6 +15,7 @@
 # Usage: ruby verify/connect.rb
 
 require_relative '../lib/rble'
+require 'timeout'
 
 SCRIPT_NAME = "verify/connect"
 SCAN_TIMEOUT = 15

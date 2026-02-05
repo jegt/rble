@@ -14,6 +14,7 @@
 # Usage: ruby verify/active_scan.rb
 
 require_relative '../lib/rble'
+require 'timeout'
 
 SCRIPT_NAME = "verify/active_scan"
 DURATION = 15

@@ -14,6 +14,7 @@
 # Usage: ruby verify/passive_scan.rb
 
 require_relative '../lib/rble'
+require 'timeout'
 
 SCRIPT_NAME = "verify/passive_scan"
 DURATION = 60

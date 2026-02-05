@@ -14,6 +14,7 @@
 # Usage: ruby verify/subscribe.rb
 
 require_relative '../lib/rble'
+require 'timeout'
 
 SCRIPT_NAME = "verify/subscribe"
 SCAN_TIMEOUT = 15
