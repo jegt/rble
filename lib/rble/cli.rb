@@ -4,6 +4,7 @@ require 'thor'
 require 'rble'
 require_relative 'cli/formatters/text'
 require_relative 'cli/formatters/json'
+require_relative 'cli/adapter'
 
 module RBLE
   module CLI
@@ -32,6 +33,22 @@ module RBLE
         require_relative 'cli/scan'
         Scan.new(options).execute
       end
+
+      desc "status", "Show Bluetooth adapter status"
+      method_option :adapter, type: :string, desc: "Adapter name (default: auto)"
+      def status
+        require_relative 'cli/status'
+        Status.new(options).execute
+      end
+
+      desc "doctor", "Diagnose Bluetooth problems"
+      def doctor
+        require_relative 'cli/doctor'
+        Doctor.new(options).execute
+      end
+
+      desc "adapter SUBCOMMAND", "Manage Bluetooth adapters"
+      subcommand "adapter", AdapterCli
 
       desc "version", "Show rble version"
       def version

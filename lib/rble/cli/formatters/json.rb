@@ -14,6 +14,18 @@ module RBLE
             address_type: device.address_type
           })
         end
+
+        def status(info)
+          puts JSON.generate(info)
+        end
+
+        def adapter_list(adapters)
+          puts JSON.generate(adapters)
+        end
+
+        def adapter_confirm(message)
+          puts JSON.generate({ status: "ok", message: message })
+        end
       end
     end
   end
