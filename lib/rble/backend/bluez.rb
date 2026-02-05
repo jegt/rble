@@ -114,13 +114,99 @@ module RBLE
           {
             name: path.split('/').last,
             address: props['Address'],
-            powered: props['Powered']
+            powered: props['Powered'],
+            discoverable: props['Discoverable'],
+            pairable: props['Pairable'],
+            alias: props['Alias'],
+            discovering: props['Discovering']
           }
         end
       rescue StandardError => e
         raise Error, "Failed to list adapters: #{e.message}"
       ensure
         conn&.disconnect
+      end
+
+      # Get the default adapter name
+      # @return [String] Adapter name (e.g., "hci0")
+      # @raise [AdapterNotFoundError] if no adapter found
+      def default_adapter_name
+        adapter_list = adapters
+        raise AdapterNotFoundError if adapter_list.empty?
+
+        adapter_list.first[:name]
+      end
+
+      # Get full info for a single adapter
+      # @param adapter_name [String] Adapter name (e.g., "hci0")
+      # @return [Hash] Adapter properties
+      # @raise [AdapterNotFoundError] if adapter not found
+      def adapter_info(adapter_name)
+        conn = RBLE::BlueZ::DBusConnection.new
+        conn.connect
+
+        om = conn.object_manager
+        managed = om.GetManagedObjects.first
+
+        adapter_path = "/org/bluez/#{adapter_name}"
+        entry = managed.find { |path, ifaces| path == adapter_path && ifaces.key?(RBLE::BlueZ::ADAPTER_INTERFACE) }
+        raise AdapterNotFoundError unless entry
+
+        _path, ifaces = entry
+        props = ifaces[RBLE::BlueZ::ADAPTER_INTERFACE]
+        {
+          name: adapter_name,
+          address: props['Address'],
+          powered: props['Powered'],
+          discoverable: props['Discoverable'],
+          pairable: props['Pairable'],
+          alias: props['Alias'],
+          discovering: props['Discovering']
+        }
+      rescue AdapterNotFoundError
+        raise
+      rescue StandardError => e
+        raise Error, "Failed to get adapter info: #{e.message}"
+      ensure
+        conn&.disconnect
+      end
+
+      # Set a property on an adapter
+      # @param adapter_name [String] Adapter name (e.g., "hci0")
+      # @param property [Symbol] Property to set (:powered, :discoverable, :pairable, :alias)
+      # @param value [Object] Value to set
+      # @return [true]
+      # @raise [RBLE::Error] on failure
+      def adapter_set_property(adapter_name, property, value)
+        session = RBLE::BlueZ::DBusSession.new
+        session.connect
+        session.start_event_loop
+
+        begin
+          adapter_path = "/org/bluez/#{adapter_name}"
+          adapter = RBLE::BlueZ::Adapter.new_from_session(session, adapter_path)
+
+          case property
+          when :powered
+            adapter.set_powered(value)
+          when :discoverable
+            adapter.set_discoverable(value)
+          when :pairable
+            adapter.set_pairable(value)
+          when :alias
+            adapter.set_alias(value)
+          else
+            raise Error, "Unknown adapter property: #{property}"
+          end
+
+          true
+        ensure
+          session.close
+        end
+      rescue RBLE::Error
+        raise
+      rescue StandardError => e
+        raise Error, "Failed to set adapter property: #{e.message}"
       end
 
       # Process events (blocking) - call this to receive callbacks

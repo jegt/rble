@@ -41,6 +41,48 @@ module RBLE
         @session.async_get_property(@path, ADAPTER_INTERFACE, 'Discovering', timeout: 5)
       end
 
+      # Check if adapter is discoverable
+      # @return [Boolean]
+      def discoverable?
+        @session.async_get_property(@path, ADAPTER_INTERFACE, 'Discoverable', timeout: 5)
+      end
+
+      # Check if adapter is pairable
+      # @return [Boolean]
+      def pairable?
+        @session.async_get_property(@path, ADAPTER_INTERFACE, 'Pairable', timeout: 5)
+      end
+
+      # Get adapter alias (friendly name)
+      # @return [String]
+      def alias_name
+        @session.async_get_property(@path, ADAPTER_INTERFACE, 'Alias', timeout: 5)
+      end
+
+      # Set adapter power state
+      # @param value [Boolean] true to power on, false to power off
+      def set_powered(value)
+        @session.async_set_property(@path, ADAPTER_INTERFACE, 'Powered', value, timeout: 5)
+      end
+
+      # Set adapter discoverable mode
+      # @param value [Boolean] true to enable, false to disable
+      def set_discoverable(value)
+        @session.async_set_property(@path, ADAPTER_INTERFACE, 'Discoverable', value, timeout: 5)
+      end
+
+      # Set adapter pairable mode
+      # @param value [Boolean] true to enable, false to disable
+      def set_pairable(value)
+        @session.async_set_property(@path, ADAPTER_INTERFACE, 'Pairable', value, timeout: 5)
+      end
+
+      # Set adapter alias (friendly name)
+      # @param name [String] New alias
+      def set_alias(name)
+        @session.async_set_property(@path, ADAPTER_INTERFACE, 'Alias', name, timeout: 5)
+      end
+
       # Set discovery filter before starting scan
       # @param service_uuids [Array<String>, nil] Filter by these UUIDs
       # @param allow_duplicates [Boolean] Receive every advertisement
@@ -93,12 +135,16 @@ module RBLE
       end
 
       # Get adapter info as hash
-      # @return [Hash] with :name, :address, :powered keys
+      # @return [Hash] with adapter properties
       def to_h
         {
           name: @name,
           address: address,
-          powered: powered?
+          powered: powered?,
+          discoverable: discoverable?,
+          pairable: pairable?,
+          alias: alias_name,
+          discovering: discovering?
         }
       end
 
