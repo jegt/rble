@@ -65,6 +65,17 @@ module RBLE
           puts JSON.generate(output)
         end
 
+        def monitor_value(address:, uuid:, name:, raw:, formatted:, timestamp:)
+          puts JSON.generate({
+            timestamp: timestamp.iso8601(3),
+            address: address,
+            uuid: uuid,
+            name: name,
+            raw_hex: raw.bytes.map { |b| format("%02x", b) }.join,
+            value: formatted
+          })
+        end
+
         def show_tree(tree_data)
           output = {
             address: tree_data[:address],

@@ -66,6 +66,12 @@ module RBLE
           # Text mode: status already printed on stderr, no stdout output needed
         end
 
+        def monitor_value(address:, uuid:, name:, raw:, formatted:, timestamp:)
+          ts = timestamp.strftime("%H:%M:%S.%L")
+          label = name || uuid
+          puts "[#{ts}] #{label}: #{formatted}"
+        end
+
         def show_tree(tree_data)
           header = if tree_data[:name]
                      "#{tree_data[:name]} (#{tree_data[:address]})"

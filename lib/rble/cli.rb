@@ -105,6 +105,17 @@ module RBLE
         Write.new(merged).execute
       end
 
+      desc "monitor ADDRESS CHARACTERISTIC", "Subscribe to characteristic notifications"
+      method_option :timeout, type: :numeric, aliases: "-t", default: 10,
+                              desc: "Connection timeout in seconds"
+      method_option :reconnect, type: :boolean, default: false,
+                                desc: "Auto-reconnect on disconnect"
+      def monitor(address, characteristic)
+        require_relative 'cli/monitor'
+        merged = options.merge("address" => address, "characteristic" => characteristic)
+        Monitor.new(merged).execute
+      end
+
       desc "status", "Show Bluetooth adapter status"
       method_option :adapter, type: :string, desc: "Adapter name (default: auto)"
       def status
