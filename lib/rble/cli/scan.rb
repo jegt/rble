@@ -1,12 +1,15 @@
 # frozen_string_literal: true
 
+require 'set'
+
 module RBLE
   module CLI
     class Scan
       def initialize(options)
         @options = options
         @formatter = options["json"] ? Formatters::Json.new : Formatters::Text.new
-        @device_count = 0
+        @advertisement_count = 0
+        @seen_addresses = Set.new
         @start_time = nil
       end
 
@@ -19,14 +22,16 @@ module RBLE
 
         prev_handler = trap("INT") { scanner.stop }
 
-        @device_count = 0
+        @advertisement_count = 0
+        @seen_addresses = Set.new
         @start_time = Time.now
 
         begin
           scanner.start do |device|
             next unless matches_filters?(device)
 
-            @device_count += 1
+            @advertisement_count += 1
+            @seen_addresses.add(device.address)
             @formatter.device(device)
           end
         rescue RBLE::Error => e
@@ -36,9 +41,12 @@ module RBLE
         end
 
         duration = (Time.now - @start_time).round(1)
-        $stderr.puts "Discovered #{@device_count} device#{'s' unless @device_count == 1} in #{duration}s"
+        device_count = @seen_addresses.size
+        $stderr.puts "Discovered #{device_count} device#{'s' unless device_count == 1} " \
+                     "(#{@advertisement_count} advertisement#{'s' unless @advertisement_count == 1}) " \
+                     "in #{duration}s"
 
-        if @options["timeout"] && @device_count.zero? && has_filters?
+        if @options["timeout"] && @advertisement_count.zero? && has_filters?
           $stderr.puts "No devices found matching filters"
         end
       end

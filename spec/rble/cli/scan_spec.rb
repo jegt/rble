@@ -122,14 +122,30 @@ RSpec.describe RBLE::CLI::Scan do
       expect(RBLE::Scanner).to have_received(:new).with(hash_including(allow_duplicates: true))
     end
 
-    it "prints summary to stderr" do
+    it "prints summary with unique devices and advertisement count to stderr" do
       scan = described_class.new(make_options)
       result = capture_output { scan.execute }
 
-      expect(result[:stderr]).to match(/Discovered 4 devices? in \d+\.\ds/)
+      expect(result[:stderr]).to match(/Discovered 4 devices \(4 advertisements\) in \d+\.\ds/)
     end
 
-    it "uses singular 'device' for count of 1" do
+    it "distinguishes unique devices from repeated advertisements" do
+      repeated_devices = [
+        RBLE::Device.new(address: "AA:BB:CC:DD:EE:FF", name: "Polar H10", rssi: -65, address_type: "public"),
+        RBLE::Device.new(address: "AA:BB:CC:DD:EE:FF", name: "Polar H10", rssi: -63, address_type: "public"),
+        RBLE::Device.new(address: "11:22:33:44:55:66", name: "Ruuvi 1234", rssi: -80, address_type: "random")
+      ]
+      allow(scanner).to receive(:start) do |&block|
+        repeated_devices.each { |d| block.call(d) }
+      end
+
+      scan = described_class.new(make_options)
+      result = capture_output { scan.execute }
+
+      expect(result[:stderr]).to match(/Discovered 2 devices \(3 advertisements\) in/)
+    end
+
+    it "uses singular forms for count of 1" do
       allow(scanner).to receive(:start) do |&block|
         block.call(devices.first)
       end
@@ -137,7 +153,7 @@ RSpec.describe RBLE::CLI::Scan do
       scan = described_class.new(make_options)
       result = capture_output { scan.execute }
 
-      expect(result[:stderr]).to match(/Discovered 1 device in/)
+      expect(result[:stderr]).to match(/Discovered 1 device \(1 advertisement\) in/)
     end
 
     it "shows unnamed devices when no name filter is active" do
