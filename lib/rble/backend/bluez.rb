@@ -517,36 +517,6 @@ module RBLE
 
       private
 
-      # Setup PropertiesChanged monitoring for disconnect detection
-      # Uses the Connection's own DBusSession for monitoring
-      # @param device_path [String] D-Bus device path
-      # @param connection [Connection] Connection to notify on disconnect
-      def setup_disconnect_monitoring(device_path, connection)
-        # Use the Connection's own D-Bus session for monitoring
-        # This ensures the Connection's event loop receives disconnect signals
-        session = connection.dbus_session
-        return unless session # No session = no monitoring (e.g., macOS backend)
-
-        # Use async_introspect to avoid deadlock (Connection's event loop is running)
-        device_obj = session.async_introspect(device_path, timeout: 5)
-        props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
-
-        # Subscribe to PropertiesChanged for this device
-        # The signal handler will be called when any property changes
-        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
-          next unless interface == RBLE::BlueZ::DEVICE_INTERFACE
-          next unless changed.key?('Connected')
-
-          if changed['Connected'] == false
-            # Device disconnected unexpectedly
-            # BlueZ doesn't expose disconnect reason via D-Bus, always use :link_loss
-            handle_unexpected_disconnect(device_path)
-          end
-        end
-
-        # No separate monitoring loop needed - Connection's event loop handles signals
-      end
-
       # Extract device path from characteristic path
       # @param char_path [String] Characteristic path
       #   Format: /org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX/serviceXXXX/charXXXX
@@ -584,39 +554,6 @@ module RBLE
         # Notify the Connection object with link_loss reason
         # Called OUTSIDE mutex to prevent deadlock if callback accesses backend
         connection.handle_disconnect(:link_loss)
-      end
-
-      # Translate D-Bus errors to human-readable messages with error code
-      # @param error [DBus::Error] The D-Bus error
-      # @return [String] Human-readable message with error code
-      def translate_dbus_error(error)
-        description = case error.name
-        when 'org.bluez.Error.Failed'
-          'Operation failed'
-        when 'org.bluez.Error.InProgress'
-          'Another operation in progress'
-        when 'org.bluez.Error.NotConnected'
-          'Device not connected'
-        when 'org.bluez.Error.NotPermitted'
-          'Operation not permitted'
-        when 'org.bluez.Error.NotAuthorized'
-          'Authorization required'
-        when 'org.bluez.Error.NotSupported'
-          'Operation not supported'
-        when 'org.bluez.Error.InvalidValueLength'
-          'Invalid data length'
-        when 'org.bluez.Error.InvalidOffset'
-          'Invalid offset'
-        when 'org.bluez.Error.NotReady'
-          'Device not ready'
-        when 'org.bluez.Error.AuthenticationFailed'
-          'Authentication failed'
-        else
-          error.message
-        end
-
-        # Include error code for debugging
-        "#{description} (#{error.name})"
       end
 
       # Setup adapter for scanning using the given session
