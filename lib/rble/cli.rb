@@ -43,6 +43,32 @@ module RBLE
         Show.new(merged).execute
       end
 
+      desc "pair ADDRESS", "Pair with a BLE device"
+      method_option :timeout, type: :numeric, aliases: "-t", default: 30,
+                              desc: "Pairing timeout in seconds"
+      method_option :security, type: :string, aliases: "-s",
+                               desc: "Security level (low, medium, high)"
+      method_option :force, type: :boolean, default: false,
+                            desc: "Auto-accept pairing prompts"
+      def pair(address)
+        require_relative 'cli/pair'
+        merged = options.merge("address" => address)
+        Pair.new(merged).execute
+      end
+
+      desc "unpair ADDRESS", "Remove pairing bond from a device"
+      def unpair(address)
+        require_relative 'cli/unpair'
+        merged = options.merge("address" => address)
+        Unpair.new(merged).execute
+      end
+
+      desc "paired", "List bonded devices"
+      def paired
+        require_relative 'cli/paired'
+        Paired.new(options).execute
+      end
+
       desc "status", "Show Bluetooth adapter status"
       method_option :adapter, type: :string, desc: "Adapter name (default: auto)"
       def status
