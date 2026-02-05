@@ -9,6 +9,7 @@ module RBLE
     DEVICE_INTERFACE = 'org.bluez.Device1'
     GATT_SERVICE_INTERFACE = 'org.bluez.GattService1'
     GATT_CHARACTERISTIC_INTERFACE = 'org.bluez.GattCharacteristic1'
+    GATT_DESCRIPTOR_INTERFACE = 'org.bluez.GattDescriptor1'
     PROPERTIES_INTERFACE = 'org.freedesktop.DBus.Properties'
     OBJECT_MANAGER_INTERFACE = 'org.freedesktop.DBus.ObjectManager'
   end

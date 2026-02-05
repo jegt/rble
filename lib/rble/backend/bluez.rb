@@ -397,6 +397,24 @@ module RBLE
         conn&.disconnect
       end
 
+      # Read the device name from BlueZ Device1 properties
+      # @param device_path [String] D-Bus device path
+      # @return [String, nil] Device name or alias, nil if not found
+      def device_name(device_path)
+        conn = RBLE::BlueZ::DBusConnection.new
+        conn.connect
+        begin
+          managed = conn.object_manager.GetManagedObjects.first
+          device_ifaces = managed[device_path]
+          return nil unless device_ifaces
+          device_props = device_ifaces[RBLE::BlueZ::DEVICE_INTERFACE]
+          return nil unless device_props
+          device_props['Name'] || device_props['Alias']
+        ensure
+          conn.disconnect
+        end
+      end
+
       # Read a characteristic value
       # Uses the Connection's DBusSession for D-Bus operations
       # @param char_path [String] D-Bus characteristic path
@@ -1038,13 +1056,24 @@ module RBLE
             char_uuid = char_props['UUID']
             char_flags = char_props['Flags'] || []
 
+            # Enumerate descriptors under this characteristic
+            desc_entries = managed.select do |path, ifaces|
+              path.start_with?("#{char_path}/") && ifaces.key?(RBLE::BlueZ::GATT_DESCRIPTOR_INTERFACE)
+            end
+
+            descriptors = desc_entries.map do |desc_path, desc_ifaces|
+              desc_props = desc_ifaces[RBLE::BlueZ::GATT_DESCRIPTOR_INTERFACE]
+              { uuid: desc_props['UUID'], path: desc_path }
+            end
+
             characteristics << {
               data: Characteristic.new(
                 uuid: char_uuid,
                 flags: char_flags,
                 service_uuid: service_uuid
               ),
-              path: char_path
+              path: char_path,
+              descriptors: descriptors
             }
           end
 
