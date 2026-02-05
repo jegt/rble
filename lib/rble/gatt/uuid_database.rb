@@ -17,9 +17,6 @@ module RBLE
     # @example Check if UUID is standard Bluetooth SIG
     #   RBLE::GATT::UUIDDatabase.standard_uuid?("180d") # => true
     module UUIDDatabase
-      # Bluetooth Base UUID suffix for standard 16-bit UUIDs
-      BLUETOOTH_BASE_UUID_SUFFIX = "-0000-1000-8000-00805f9b34fb"
-
       # Bluetooth SIG Assigned Services + common vendor services
       # Standard UUIDs keyed by short 4-char hex (lowercase)
       # Vendor UUIDs keyed by full 128-bit UUID (lowercase)
@@ -380,8 +377,6 @@ module RBLE
         downcased = uuid.downcase
         if (match = BLUETOOTH_BASE_UUID_RE.match(downcased))
           match[1]
-        elsif SHORT_UUID_RE.match?(downcased)
-          downcased
         else
           downcased
         end
