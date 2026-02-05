@@ -73,20 +73,22 @@ module RBLE
   #   char.unsubscribe
   #
   class ActiveCharacteristic
-    attr_reader :uuid, :flags, :service_uuid, :path
+    attr_reader :uuid, :flags, :service_uuid, :path, :descriptors
 
     # Create an active characteristic
     # @param characteristic [Characteristic] Underlying characteristic data
     # @param path [String] D-Bus object path
     # @param connection [Connection] Parent connection (for state checks)
     # @param backend [Backend::Base] Backend for GATT operations
-    def initialize(characteristic:, path:, connection:, backend:)
+    # @param descriptors [Array<Hash>] Descriptor info hashes with :uuid and :path keys
+    def initialize(characteristic:, path:, connection:, backend:, descriptors: [])
       @uuid = characteristic.uuid
       @flags = characteristic.flags
       @service_uuid = characteristic.service_uuid
       @path = path
       @connection = connection
       @backend = backend
+      @descriptors = descriptors
       @subscribed = false
     end
 

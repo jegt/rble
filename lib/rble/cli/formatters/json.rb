@@ -26,6 +26,37 @@ module RBLE
         def adapter_confirm(message)
           puts JSON.generate({ status: "ok", message: message })
         end
+
+        def show_tree(tree_data)
+          output = {
+            address: tree_data[:address],
+            name: tree_data[:name],
+            services: tree_data[:services].map do |service|
+              {
+                uuid: service[:uuid],
+                name: service[:resolved_name],
+                primary: service[:primary],
+                characteristics: service[:characteristics].map do |char|
+                  {
+                    uuid: char[:uuid],
+                    name: char[:resolved_name],
+                    properties: char[:properties],
+                    handle: char[:handle],
+                    descriptors: (char[:descriptors] || []).map do |desc|
+                      {
+                        uuid: desc[:uuid],
+                        name: desc[:resolved_name],
+                        handle: desc[:handle]
+                      }
+                    end
+                  }
+                end
+              }
+            end
+          }
+
+          puts JSON.generate(output)
+        end
       end
     end
   end

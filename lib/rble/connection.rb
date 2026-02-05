@@ -310,7 +310,8 @@ module RBLE
             characteristic: char_info[:data],
             path: char_info[:path],
             connection: self,
-            backend: @backend
+            backend: @backend,
+            descriptors: char_info[:descriptors] || []
           )
         end
 

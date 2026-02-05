@@ -34,6 +34,15 @@ module RBLE
         Scan.new(options).execute
       end
 
+      desc "show ADDRESS", "Display GATT services and characteristics"
+      method_option :timeout, type: :numeric, aliases: "-t", default: 10,
+                              desc: "Connection timeout in seconds"
+      def show(address)
+        require_relative 'cli/show'
+        merged = options.merge("address" => address)
+        Show.new(merged).execute
+      end
+
       desc "status", "Show Bluetooth adapter status"
       method_option :adapter, type: :string, desc: "Adapter name (default: auto)"
       def status
