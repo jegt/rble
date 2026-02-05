@@ -426,7 +426,7 @@ module RBLE
         # We don't wait for registration to complete - notifications may be missed briefly
         # but this avoids blocking the subscribe call for 0.5-1s
         Thread.new do
-          props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+          session.register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
             next unless interface == RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE
             next unless changed.key?('Value')
 
@@ -895,7 +895,7 @@ module RBLE
         device_obj = session.async_introspect(device_path, timeout: 5)
         props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
-        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+        session.register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
           session.enqueue(:properties_changed, device_path, changed) if interface == RBLE::BlueZ::DEVICE_INTERFACE
         end
 

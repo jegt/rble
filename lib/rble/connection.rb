@@ -383,7 +383,7 @@ module RBLE
 
       warn "      [RBLE] Connection: registering on_signal..." if RBLE.trace
       start = Time.now
-      props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+      @dbus_session.register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
         next unless interface == RBLE::BlueZ::DEVICE_INTERFACE
         next unless changed.key?('Connected')
 
