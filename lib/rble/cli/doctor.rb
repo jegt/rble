@@ -160,11 +160,10 @@ module RBLE
       def check_rfkill
         return nil unless command_exists?("rfkill")
 
-        output = `rfkill --json 2>/dev/null`
-        unless $?.success?
-          # Fall back to text parsing
-          output = `rfkill list bluetooth 2>/dev/null`
-          return nil unless $?.success?
+        output, success = run_command("rfkill --json 2>/dev/null")
+        unless success
+          output, success = run_command("rfkill list bluetooth 2>/dev/null")
+          return nil unless success
           return parse_rfkill_text(output)
         end
 
@@ -212,14 +211,22 @@ module RBLE
       def check_bluetoothd_version
         return nil unless command_exists?("bluetoothd")
 
-        output = `bluetoothd --version 2>/dev/null`.strip
-        return nil if output.empty?
+        output, success = run_command("bluetoothd --version 2>/dev/null")
+        return nil unless success
 
-        { severity: :info, title: "BlueZ version", message: "BlueZ #{output}" }
+        version = output.strip
+        return nil if version.empty?
+
+        { severity: :info, title: "BlueZ version", message: "BlueZ #{version}" }
       end
 
       def command_exists?(cmd)
         system("which", cmd, out: File::NULL, err: File::NULL)
+      end
+
+      def run_command(cmd)
+        output = `#{cmd}`
+        [output, $?.success?]
       end
 
       def parse_rfkill_text(output)
