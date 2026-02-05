@@ -27,6 +27,18 @@ module RBLE
           puts JSON.generate({ status: "ok", message: message })
         end
 
+        def paired_list(devices)
+          puts JSON.generate(devices)
+        end
+
+        def pair_result(success:, address:, message:)
+          puts JSON.generate({
+            status: success ? "ok" : "error",
+            address: address,
+            message: message
+          })
+        end
+
         def show_tree(tree_data)
           output = {
             address: tree_data[:address],

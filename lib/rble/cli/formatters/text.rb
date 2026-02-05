@@ -36,6 +36,26 @@ module RBLE
           puts message
         end
 
+        def paired_list(devices)
+          if devices.empty?
+            puts "No bonded devices"
+            return
+          end
+
+          devices.each do |device|
+            name = truncate(device[:name] || "Unknown", 25)
+            connected_str = device[:connected] ? "connected" : "not connected"
+            type_str = device[:address_type] == "random" ? "BLE (random)" : "BLE (public)"
+            puts format("%-17s  %-25s  %-13s  %s", device[:address], name, connected_str, type_str)
+          end
+
+          puts "\n#{devices.size} bonded device#{'s' unless devices.size == 1}"
+        end
+
+        def pair_result(success:, address:, message:)
+          # Text mode: status already printed on stderr, no stdout output needed
+        end
+
         def show_tree(tree_data)
           header = if tree_data[:name]
                      "#{tree_data[:name]} (#{tree_data[:address]})"
