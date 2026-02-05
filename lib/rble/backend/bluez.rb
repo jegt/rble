@@ -619,7 +619,175 @@ module RBLE
         true
       end
 
+      # Pair with a BLE device
+      #
+      # Creates a PairingSession with a dedicated D-Bus bus, exports a PairingAgent,
+      # and drives the Pair() call with agent callback processing.
+      #
+      # @param device_path [String] D-Bus device path
+      # @param io_handler [#display, #prompt, #confirm] IO handler for user interaction
+      # @param force [Boolean] Skip interactive prompts (auto-accept)
+      # @param capability [String, nil] Security capability level ("low", "medium", "high")
+      # @param timeout [Numeric] Pairing timeout in seconds
+      # @return [Symbol] :paired on success, :already_paired if already paired
+      # @raise [RBLE::AuthenticationError] if authentication fails
+      # @raise [RBLE::ConnectionFailed] if connection to device fails
+      # @raise [RBLE::Error] on other failures
+      def pair_device(device_path, io_handler:, force: false, capability: nil, timeout: 30)
+        # Check if already paired via D-Bus properties
+        if device_already_paired?(device_path)
+          return :already_paired
+        end
+
+        mapped_capability = RBLE::BlueZ::PairingSession::CAPABILITY_MAP.fetch(
+          capability,
+          RBLE::BlueZ::PairingSession::CAPABILITY_MAP[nil]
+        )
+
+        session = RBLE::BlueZ::PairingSession.new(
+          io_handler: io_handler,
+          force: force,
+          capability: mapped_capability
+        )
+        session.pair(device_path, timeout: timeout)
+      end
+
+      # Remove pairing bond from a device
+      #
+      # If the device is connected, disconnects first. Uses Adapter1.RemoveDevice
+      # to remove the pairing bond. Idempotent: returns :not_paired if device is
+      # not known to BlueZ.
+      #
+      # @param device_path [String] D-Bus device path
+      # @return [Symbol] :unpaired on success, :not_paired if not paired
+      # @raise [RBLE::Error] on failure
+      def unpair_device(device_path)
+        conn = RBLE::BlueZ::DBusConnection.new
+        conn.connect
+
+        begin
+          managed = conn.object_manager.GetManagedObjects.first
+
+          # Check if device exists in BlueZ
+          device_ifaces = managed[device_path]
+          unless device_ifaces && device_ifaces.key?(RBLE::BlueZ::DEVICE_INTERFACE)
+            return :not_paired
+          end
+
+          # If connected, disconnect first
+          device_props = device_ifaces[RBLE::BlueZ::DEVICE_INTERFACE]
+          if device_props['Connected']
+            begin
+              session = RBLE::BlueZ::DBusSession.new
+              session.connect
+              session.start_event_loop
+              session.async_disconnect(device_path, timeout: 5)
+            rescue StandardError => e
+              RBLE.logger&.debug("[RBLE] Error disconnecting before unpair: #{e.message}")
+            ensure
+              session&.close
+            end
+          end
+
+          # Extract adapter path from device path
+          # Device path: /org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX
+          # Adapter path: /org/bluez/hci0
+          parts = device_path.split('/')
+          dev_index = parts.index { |p| p.start_with?('dev_') }
+          adapter_path = parts[0...dev_index].join('/')
+
+          # Call Adapter1.RemoveDevice
+          adapter_obj = conn.object(adapter_path)
+          adapter_iface = adapter_obj[RBLE::BlueZ::ADAPTER_INTERFACE]
+          adapter_iface.RemoveDevice(device_path)
+
+          :unpaired
+        ensure
+          conn.disconnect
+        end
+      rescue DBus::Error => e
+        if e.name == 'org.bluez.Error.DoesNotExist'
+          :not_paired
+        else
+          raise RBLE::Error, "Failed to unpair device: #{e.message}"
+        end
+      end
+
+      # List all bonded/paired devices
+      #
+      # Queries BlueZ via GetManagedObjects and filters for devices that have
+      # Bonded == true or Paired == true.
+      #
+      # @return [Array<Hash>] Sorted array of device info hashes with:
+      #   :address, :name, :paired, :bonded, :connected, :trusted, :address_type, :rssi, :icon, :adapter
+      # @raise [RBLE::Error] on failure
+      def bonded_devices
+        conn = RBLE::BlueZ::DBusConnection.new
+        conn.connect
+
+        begin
+          managed = conn.object_manager.GetManagedObjects.first
+
+          devices = []
+          managed.each do |path, ifaces|
+            next unless ifaces.key?(RBLE::BlueZ::DEVICE_INTERFACE)
+
+            props = ifaces[RBLE::BlueZ::DEVICE_INTERFACE]
+            paired = props['Paired'] == true
+            bonded = props['Bonded'] == true
+
+            next unless paired || bonded
+
+            # Extract adapter name from path
+            parts = path.split('/')
+            dev_index = parts.index { |p| p.start_with?('dev_') }
+            adapter_name = dev_index ? parts[dev_index - 1] : nil
+
+            devices << {
+              address: props['Address'],
+              name: props['Name'] || props['Alias'],
+              paired: paired,
+              bonded: bonded,
+              connected: props['Connected'] == true,
+              trusted: props['Trusted'] == true,
+              address_type: props['AddressType'] || 'public',
+              rssi: props['RSSI'],
+              icon: props['Icon'],
+              adapter: adapter_name
+            }
+          end
+
+          devices.sort_by { |d| d[:address].to_s }
+        ensure
+          conn.disconnect
+        end
+      rescue StandardError => e
+        raise RBLE::Error, "Failed to list bonded devices: #{e.message}"
+      end
+
       private
+
+      # Check if a device is already paired via D-Bus properties
+      # @param device_path [String] D-Bus device path
+      # @return [Boolean] true if device is paired
+      def device_already_paired?(device_path)
+        conn = RBLE::BlueZ::DBusConnection.new
+        conn.connect
+        begin
+          managed = conn.object_manager.GetManagedObjects.first
+          device_ifaces = managed[device_path]
+          return false unless device_ifaces
+
+          props = device_ifaces[RBLE::BlueZ::DEVICE_INTERFACE]
+          return false unless props
+
+          props['Paired'] == true
+        ensure
+          conn.disconnect
+        end
+      rescue StandardError
+        false
+      end
 
       # Extract device path from characteristic path
       # @param char_path [String] Characteristic path

@@ -144,6 +144,38 @@ module RBLE
       def subscriptions_for_connection(connection)
         []
       end
+
+      # Pairing operations (implement in subclass)
+
+      # Pair with a BLE device
+      #
+      # @param device_path [String] D-Bus device path
+      # @param io_handler [#display, #prompt, #confirm] IO handler for user interaction
+      # @param force [Boolean] Skip interactive prompts (auto-accept)
+      # @param capability [String, nil] Security capability level ("low", "medium", "high", or nil for default)
+      # @param timeout [Numeric] Pairing timeout in seconds
+      # @return [Symbol] :paired on success, :already_paired if already paired
+      # @raise [NotImplementedError] if not implemented by subclass
+      def pair_device(device_path, io_handler:, force: false, capability: nil, timeout: 30)
+        raise NotImplementedError, "#{self.class}#pair_device must be implemented"
+      end
+
+      # Remove pairing bond from a device
+      #
+      # @param device_path [String] D-Bus device path
+      # @return [Symbol] :unpaired on success, :not_paired if not paired
+      # @raise [NotImplementedError] if not implemented by subclass
+      def unpair_device(device_path)
+        raise NotImplementedError, "#{self.class}#unpair_device must be implemented"
+      end
+
+      # List all bonded/paired devices
+      #
+      # @return [Array<Hash>] Array of device info hashes
+      # @raise [NotImplementedError] if not implemented by subclass
+      def bonded_devices
+        raise NotImplementedError, "#{self.class}#bonded_devices must be implemented"
+      end
     end
   end
 end
