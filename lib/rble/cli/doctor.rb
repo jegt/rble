@@ -2,7 +2,11 @@
 
 require 'json'
 require 'etc'
-require_relative '../bluez'
+begin
+  require_relative '../bluez'
+rescue LoadError
+  # BlueZ backend not available (non-Linux platform)
+end
 
 module RBLE
   module CLI
