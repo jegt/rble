@@ -24,18 +24,13 @@ Gem::Specification.new do |spec|
   # Include lib/, ext/, and exe/ but exclude build artifacts
   spec.files = Dir['lib/**/*', 'exe/*', 'LICENSE.txt', 'README.md', 'CHANGELOG.md'] +
                Dir['ext/macos_ble/Package.swift', 'ext/macos_ble/Sources/**/*.swift'] +
-               ['ext/macos_ble/extconf.rb'] +
-               Dir['ext/linux_ble/Package.swift', 'ext/linux_ble/Sources/**/*.swift'] +
-               ['ext/linux_ble/extconf.rb']
+               ['ext/macos_ble/extconf.rb']
   spec.bindir = 'exe'
   spec.executables = ['rble']
   spec.require_paths = ['lib']
 
-  # Build Swift helpers during gem install (each skips on wrong platform)
-  spec.extensions = [
-    'ext/macos_ble/extconf.rb',
-    'ext/linux_ble/extconf.rb'
-  ]
+  # Build Swift helper during gem install (skips on non-macOS)
+  spec.extensions = ['ext/macos_ble/extconf.rb']
 
   # Runtime dependencies
   spec.add_dependency 'thor', '~> 1.3'

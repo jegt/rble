@@ -6,12 +6,12 @@ require_relative 'errors'
 module RBLE
   module Backend
     @backend_mutex = Mutex.new
-    @backend_symbol = nil        # :bluez, :bluetooth_linux, :corebluetooth
+    @backend_symbol = nil        # :bluez, :corebluetooth
     @backend_instance = nil      # The actual backend object
     @backend_frozen = false      # Locked after first BLE operation
 
     # Returns the current backend symbol
-    # @return [Symbol] :bluez, :bluetooth_linux, or :corebluetooth
+    # @return [Symbol] :bluez or :corebluetooth
     def self.backend
       @backend_mutex.synchronize do
         ensure_backend_selected
@@ -20,7 +20,7 @@ module RBLE
     end
 
     # Set the backend to use (before first BLE operation)
-    # @param value [Symbol, String] Backend name (:bluez, :bluetooth_linux, :corebluetooth)
+    # @param value [Symbol, String] Backend name (:bluez, :corebluetooth)
     # @raise [BackendAlreadySelectedError] if backend already frozen
     # @raise [ArgumentError] if backend is invalid for platform
     # @raise [BackendUnavailableError] if backend is unavailable
@@ -51,7 +51,7 @@ module RBLE
       when /darwin/
         [:corebluetooth]
       when /linux/
-        [:bluez, :bluetooth_linux]
+        [:bluez]
       else
         []
       end
@@ -145,19 +145,7 @@ module RBLE
       # @param sym [Symbol] Backend symbol
       # @raise [BackendUnavailableError] if backend is unavailable
       def validate_backend_availability!(sym)
-        case sym
-        when :bluetooth_linux
-          helper_path = File.expand_path('../backend/bluetooth_linux', __FILE__)
-          require_relative 'backend/bluetooth_linux'
-          unless File.exist?(BluetoothLinux::HELPER_PATH)
-            raise BackendUnavailableError.new(
-              backend: :bluetooth_linux,
-              reason: "Helper not found at #{BluetoothLinux::HELPER_PATH}",
-              suggestion: 'Fallback: RBLE.backend = :bluez'
-            )
-          end
         # :bluez and :corebluetooth validated at use time
-        end
       end
 
       # Get or create backend instance
@@ -179,9 +167,6 @@ module RBLE
         when :bluez
           require_relative 'backend/bluez'
           BlueZ.new
-        when :bluetooth_linux
-          require_relative 'backend/bluetooth_linux'
-          BluetoothLinux.new
         when :corebluetooth
           require_relative 'backend/corebluetooth'
           CoreBluetooth.new

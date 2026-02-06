@@ -23,8 +23,5 @@ Gemfile.lock
 /ext/macos_ble/.build/
 /ext/macos_ble/Makefile
 /ext/macos_ble/mkmf.log
-/ext/linux_ble/.build/
-/ext/linux_ble/Makefile
-/ext/linux_ble/mkmf.log
 .claude/
 .planning/
