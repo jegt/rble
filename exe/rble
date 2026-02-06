@@ -10,4 +10,5 @@ $stderr.sync = true
 
 require "rble/cli"
 
+Thor::Base.shell = Thor::Shell::Basic
 RBLE::CLI::Main.start(ARGV)
