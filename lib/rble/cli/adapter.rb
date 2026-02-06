@@ -3,6 +3,10 @@
 module RBLE
   module CLI
     class AdapterCli < Thor
+      def self.namespace
+        "rble:adapter"
+      end
+
       class_option :json, type: :boolean, default: false,
                           desc: "Output as JSON"
       class_option :adapter, type: :string,

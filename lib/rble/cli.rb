@@ -9,6 +9,12 @@ require_relative 'cli/adapter'
 module RBLE
   module CLI
     class Main < Thor
+      package_name "rble"
+
+      def self.namespace
+        "rble"
+      end
+
       def self.exit_on_failure?
         true
       end
