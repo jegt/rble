@@ -59,6 +59,29 @@ RSpec.describe RBLE::Scanner do
       scanner = described_class.new
       expect { scanner.stop }.not_to raise_error
     end
+
+    it "sets stop_requested flag" do
+      scanner = described_class.new
+      scanner.stop
+      expect(scanner.instance_variable_get(:@stop_requested)).to be true
+    end
+
+    it "pushes shutdown event to wake queue when available" do
+      queue = Thread::Queue.new
+      scanner = described_class.new
+      scanner.instance_variable_set(:@wake_queue, queue)
+
+      if defined?(RBLE::BlueZ::Event)
+        scanner.stop
+        expect(scanner.instance_variable_get(:@stop_requested)).to be true
+        event = queue.pop(true) rescue nil
+        expect(event).not_to be_nil
+        expect(event.type).to eq(:shutdown)
+      else
+        scanner.stop
+        expect(scanner.instance_variable_get(:@stop_requested)).to be true
+      end
+    end
   end
 
   describe "#start" do

@@ -148,6 +148,15 @@ module RBLE
         @mutex.synchronize { @event_loop&.running? || false }
       end
 
+      # Get the event loop's raw queue for signal-safe direct push
+      # Returns nil if no event loop is active
+      # Reads @event_loop directly (no mutex) which is safe for reading a single
+      # instance variable - used from signal trap context where mutex is unsafe
+      # @return [Thread::Queue, nil]
+      def event_loop_queue
+        @event_loop&.queue
+      end
+
       # Get the D-Bus bus for signal registration
       # @return [DBus::SystemBus, nil]
       def bus

@@ -99,6 +99,12 @@ module RBLE
         @state_mutex.synchronize { @scanning }
       end
 
+      # Get the scan session's event queue for signal-safe direct push
+      # @return [Thread::Queue, nil]
+      def scan_event_queue
+        @scan_session&.event_loop_queue
+      end
+
       # List available adapters
       # @return [Array<Hash>]
       def adapters

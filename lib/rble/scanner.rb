@@ -47,6 +47,7 @@ module RBLE
       @on_stop = on_stop
       @backend = nil
       @stop_requested = false
+      @wake_queue = nil
       @started = false
     end
 
@@ -74,11 +75,16 @@ module RBLE
           &block
         )
 
+        # Capture direct queue reference for signal-safe stop
+        # Must be done here (not in trap) to avoid mutex access from signal context
+        @wake_queue = @backend.respond_to?(:scan_event_queue) ? @backend.scan_event_queue : nil
+
         # Process events until stop or timeout
         process_until_stop
 
       ensure
         # Ensure cleanup on any error or normal completion
+        @wake_queue = nil
         cleanup_scan
         @on_stop&.call
       end
@@ -88,9 +94,16 @@ module RBLE
 
     # Stop the current scan
     #
+    # Signal-safe: can be called from trap context.
+    # Sets the stop flag AND wakes the event loop queue so process_events
+    # returns immediately instead of waiting up to 500ms.
+    # Thread::Queue#push is signal-safe (can be called from trap context).
+    #
     # @return [void]
     def stop
       @stop_requested = true
+      # Wake the event loop queue so process_events returns immediately
+      @wake_queue&.push(RBLE::BlueZ::Event.new(type: :shutdown)) if defined?(RBLE::BlueZ::Event)
     end
 
     # Check if scan is running
