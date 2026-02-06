@@ -1,6 +1,12 @@
 # frozen_string_literal: true
 
-require 'dbus'
+begin
+  require 'dbus'
+rescue LoadError
+  raise LoadError,
+    "The ruby-dbus gem is required for the BlueZ backend on Linux. " \
+    "Install it with: gem install ruby-dbus"
+end
 
 module RBLE
   module BlueZ

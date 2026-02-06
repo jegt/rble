@@ -1,8 +1,7 @@
 PATH
   remote: .
   specs:
-    rble (0.5.0)
-      ruby-dbus (~> 0.25)
+    rble (0.6.0)
       thor (~> 1.3)
 
 GEM
@@ -62,7 +61,9 @@ GEM
     yard (0.9.38)
 
 PLATFORMS
+  arm64-darwin
   ruby
+  x86_64-darwin
   x86_64-linux
 
 DEPENDENCIES
@@ -70,6 +71,7 @@ DEPENDENCIES
   rble!
   rspec (~> 3.0)
   rubocop (~> 1.0)
+  ruby-dbus (~> 0.25)
   yard (~> 0.9)
 
 BUNDLED WITH

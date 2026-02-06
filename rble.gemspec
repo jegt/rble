@@ -8,8 +8,8 @@ Gem::Specification.new do |spec|
   spec.authors = ['Jonas Tehler']
   spec.email = ['jonas@tehler.se']
 
-  spec.summary = 'Ruby Bluetooth Low Energy library'
-  spec.description = 'Reliable BLE communication for Ruby - scanning, connections, GATT operations on Linux and macOS'
+  spec.summary = 'BLE communication library for Ruby with CoreBluetooth and BlueZ backends'
+  spec.description = 'Reliable BLE communication for Ruby - scanning, connections, GATT operations on Linux (BlueZ/D-Bus) and macOS (CoreBluetooth). Includes standalone rble CLI tool.'
   spec.homepage = 'https://github.com/jegt/rble'
   spec.license = 'MIT'
   spec.required_ruby_version = '>= 3.2'
@@ -17,6 +17,8 @@ Gem::Specification.new do |spec|
   spec.metadata['homepage_uri'] = spec.homepage
   spec.metadata['source_code_uri'] = "#{spec.homepage}/tree/main"
   spec.metadata['changelog_uri'] = "#{spec.homepage}/blob/main/CHANGELOG.md"
+  spec.metadata['documentation_uri'] = "#{spec.homepage}/blob/main/README.md"
+  spec.metadata['bug_tracker_uri'] = "#{spec.homepage}/issues"
   spec.metadata['rubygems_mfa_required'] = 'true'
 
   # Include lib/, ext/, and exe/ but exclude build artifacts
@@ -36,6 +38,5 @@ Gem::Specification.new do |spec|
   ]
 
   # Runtime dependencies
-  spec.add_dependency 'ruby-dbus', '~> 0.25'
   spec.add_dependency 'thor', '~> 1.3'
 end
