@@ -2,6 +2,7 @@
 
 require 'json'
 require 'etc'
+require_relative '../bluez'
 
 module RBLE
   module CLI
@@ -48,20 +49,55 @@ module RBLE
       end
 
       def print_text(results)
-        issues = results.select { |r| r[:severity] == :error || r[:severity] == :warning }
-        if issues.empty?
-          puts "No issues found"
-        else
-          puts "#{issues.size} issue#{'s' unless issues.size == 1} found"
+        # Phase 1: Compact checklist
+        results.each do |result|
+          case result[:severity]
+          when :info
+            extra = compact_extra(result)
+            puts "  OK  #{result[:title]}#{extra}"
+          when :warning
+            puts "WARN  #{result[:title]}"
+          when :error
+            puts "FAIL  #{result[:title]}"
+          end
         end
 
+        # Phase 2: Summary line
+        issues = results.select { |r| r[:severity] == :error || r[:severity] == :warning }
         puts
+        if issues.empty?
+          puts "All checks passed"
+        else
+          puts "#{issues.size} issue#{'s' unless issues.size == 1} found:"
 
-        results.each do |result|
-          puts "[#{result[:severity]}] #{result[:title]}"
-          puts "  #{result[:message]}"
-          puts "  Fix: #{result[:fix]}" if result[:fix]
+          # Phase 3: Detailed issue section
           puts
+          issues.each do |result|
+            label = result[:severity] == :error ? "ERROR" : "WARNING"
+            puts "  #{label}: #{result[:title]}"
+            puts "    #{result[:message]}"
+            puts "    Fix: #{result[:fix]}" if result[:fix]
+            puts
+          end
+        end
+      end
+
+      def compact_extra(result)
+        case result[:title]
+        when "Bluetooth adapter"
+          if result[:message] =~ /Adapter (\S+) found \(([^)]+)\)/
+            " (#{$1} #{$2})"
+          else
+            ""
+          end
+        when "BlueZ version"
+          if result[:message] =~ /BlueZ (.+)/
+            " (#{$1})"
+          else
+            ""
+          end
+        else
+          ""
         end
       end
 

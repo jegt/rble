@@ -66,10 +66,10 @@ RSpec.describe RBLE::CLI::Doctor do
   end
 
   describe "summary output" do
-    it "prints 'No issues found' when all checks pass" do
+    it "prints 'All checks passed' when all checks pass" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("No issues found")
+      expect(result[:stdout]).to include("All checks passed")
     end
 
     it "exits 0 when all checks pass" do
@@ -87,7 +87,7 @@ RSpec.describe RBLE::CLI::Doctor do
         }
       end
 
-      expect(result[:stdout]).to match(/\d+ issues? found/)
+      expect(result[:stdout]).to match(/\d+ issues? found:/)
     end
 
     it "exits 0 when only warnings exist (no errors)" do
@@ -100,41 +100,41 @@ RSpec.describe RBLE::CLI::Doctor do
   end
 
   describe "kernel module check" do
-    it "reports info when kernel module is loaded" do
+    it "reports OK when kernel module is loaded" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] Kernel module")
-      expect(result[:stdout]).to include("loaded")
+      expect(result[:stdout]).to include("  OK  Kernel module")
     end
 
-    it "reports error with fix when kernel module is missing" do
+    it "reports FAIL with fix when kernel module is missing" do
       allow(File).to receive(:exist?).with("/sys/module/bluetooth").and_return(false)
 
       result = capture_output do
         expect { described_class.new(make_options).execute }.to raise_error(SystemExit)
       end
 
-      expect(result[:stdout]).to include("[error] Kernel module")
+      expect(result[:stdout]).to include("FAIL  Kernel module")
+      expect(result[:stdout]).to include("ERROR: Kernel module")
       expect(result[:stdout]).to include("sudo modprobe bluetooth")
     end
   end
 
   describe "bluetoothd check" do
-    it "reports info when bluetoothd is running" do
+    it "reports OK when bluetoothd is running" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] Bluetooth daemon")
-      expect(result[:stdout]).to include("running")
+      expect(result[:stdout]).to include("  OK  Bluetooth daemon")
     end
 
-    it "reports error with fix when bluetoothd is not running" do
+    it "reports FAIL with fix when bluetoothd is not running" do
       allow_any_instance_of(described_class).to receive(:system).with("systemctl", "is-active", "--quiet", "bluetooth").and_return(false)
 
       result = capture_output do
         expect { described_class.new(make_options).execute }.to raise_error(SystemExit)
       end
 
-      expect(result[:stdout]).to include("[error] Bluetooth daemon")
+      expect(result[:stdout]).to include("FAIL  Bluetooth daemon")
+      expect(result[:stdout]).to include("ERROR: Bluetooth daemon")
       expect(result[:stdout]).to include("sudo systemctl start bluetooth")
     end
 
@@ -144,7 +144,7 @@ RSpec.describe RBLE::CLI::Doctor do
 
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] Bluetooth daemon")
+      expect(result[:stdout]).to include("  OK  Bluetooth daemon")
     end
 
     it "skips check when neither systemctl nor pgrep found" do
@@ -158,70 +158,70 @@ RSpec.describe RBLE::CLI::Doctor do
   end
 
   describe "D-Bus permissions check" do
-    it "reports info when D-Bus connection succeeds" do
+    it "reports OK when D-Bus connection succeeds" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] D-Bus access")
+      expect(result[:stdout]).to include("  OK  D-Bus access")
     end
 
-    it "reports error when D-Bus connection fails" do
+    it "reports FAIL when D-Bus connection fails" do
       allow(dbus_conn).to receive(:connect).and_raise(StandardError.new("Connection refused"))
 
       result = capture_output do
         expect { described_class.new(make_options).execute }.to raise_error(SystemExit)
       end
 
-      expect(result[:stdout]).to include("[error] D-Bus access")
+      expect(result[:stdout]).to include("FAIL  D-Bus access")
+      expect(result[:stdout]).to include("ERROR: D-Bus access")
       expect(result[:stdout]).to include("Connection refused")
     end
   end
 
   describe "adapter present check" do
-    it "reports info when adapter is found" do
+    it "reports OK with adapter details when adapter is found" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] Bluetooth adapter")
-      expect(result[:stdout]).to include("hci0")
+      expect(result[:stdout]).to include("  OK  Bluetooth adapter (hci0 AA:BB:CC:DD:EE:FF)")
     end
 
-    it "reports error when no adapters found" do
+    it "reports FAIL when no adapters found" do
       allow(backend).to receive(:adapters).and_return([])
 
       result = capture_output do
         expect { described_class.new(make_options).execute }.to raise_error(SystemExit)
       end
 
-      expect(result[:stdout]).to include("[error] Bluetooth adapter")
+      expect(result[:stdout]).to include("FAIL  Bluetooth adapter")
       expect(result[:stdout]).to include("No Bluetooth adapter found")
     end
 
-    it "reports error when AdapterNotFoundError is raised" do
+    it "reports FAIL when AdapterNotFoundError is raised" do
       allow(backend).to receive(:adapters).and_raise(RBLE::AdapterNotFoundError.new)
 
       result = capture_output do
         expect { described_class.new(make_options).execute }.to raise_error(SystemExit)
       end
 
-      expect(result[:stdout]).to include("[error] Bluetooth adapter")
+      expect(result[:stdout]).to include("FAIL  Bluetooth adapter")
     end
   end
 
   describe "adapter powered check" do
-    it "reports info when adapter is powered" do
+    it "reports OK when adapter is powered" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] Adapter power")
-      expect(result[:stdout]).to include("powered on")
+      expect(result[:stdout]).to include("  OK  Adapter power")
     end
 
-    it "reports error with fix when adapter is not powered" do
+    it "reports FAIL with fix when adapter is not powered" do
       allow(backend).to receive(:adapters).and_return([{ name: "hci0", address: "AA:BB:CC:DD:EE:FF", powered: false }])
 
       result = capture_output do
         expect { described_class.new(make_options).execute }.to raise_error(SystemExit)
       end
 
-      expect(result[:stdout]).to include("[error] Adapter power")
+      expect(result[:stdout]).to include("FAIL  Adapter power")
+      expect(result[:stdout]).to include("ERROR: Adapter power")
       expect(result[:stdout]).to include("rble adapter power on")
     end
 
@@ -237,13 +237,13 @@ RSpec.describe RBLE::CLI::Doctor do
   end
 
   describe "rfkill check" do
-    it "reports info when not blocked" do
+    it "reports OK when not blocked" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] RF kill")
+      expect(result[:stdout]).to include("  OK  RF kill")
     end
 
-    it "reports error when soft-blocked" do
+    it "reports FAIL when soft-blocked" do
       allow_any_instance_of(described_class).to receive(:run_command).with("rfkill --json 2>/dev/null").and_return(
         ['{"rfkilldevices":[{"type":"bluetooth","soft":"blocked","hard":"unblocked"}]}', true]
       )
@@ -252,12 +252,12 @@ RSpec.describe RBLE::CLI::Doctor do
         expect { described_class.new(make_options).execute }.to raise_error(SystemExit)
       end
 
-      expect(result[:stdout]).to include("[error] RF kill")
+      expect(result[:stdout]).to include("FAIL  RF kill")
       expect(result[:stdout]).to include("soft-blocked")
       expect(result[:stdout]).to include("sudo rfkill unblock bluetooth")
     end
 
-    it "reports error when hard-blocked" do
+    it "reports FAIL when hard-blocked" do
       allow_any_instance_of(described_class).to receive(:run_command).with("rfkill --json 2>/dev/null").and_return(
         ['{"rfkilldevices":[{"type":"bluetooth","soft":"unblocked","hard":"blocked"}]}', true]
       )
@@ -266,7 +266,7 @@ RSpec.describe RBLE::CLI::Doctor do
         expect { described_class.new(make_options).execute }.to raise_error(SystemExit)
       end
 
-      expect(result[:stdout]).to include("[error] RF kill")
+      expect(result[:stdout]).to include("FAIL  RF kill")
       expect(result[:stdout]).to include("hard-blocked")
     end
 
@@ -280,39 +280,37 @@ RSpec.describe RBLE::CLI::Doctor do
   end
 
   describe "bluetooth group check" do
-    it "reports info when user is in bluetooth group" do
+    it "reports OK when user is in bluetooth group" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] Bluetooth group")
-      expect(result[:stdout]).to include("in 'bluetooth' group")
+      expect(result[:stdout]).to include("  OK  Bluetooth group")
     end
 
-    it "reports warning with fix when user is not in group" do
+    it "reports WARN with fix when user is not in group" do
       allow(Process).to receive(:groups).and_return([])
 
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[warning] Bluetooth group")
+      expect(result[:stdout]).to include("WARN  Bluetooth group")
+      expect(result[:stdout]).to include("WARNING: Bluetooth group")
       expect(result[:stdout]).to include("testuser")
       expect(result[:stdout]).to include("sudo usermod -aG bluetooth testuser")
     end
 
-    it "reports info when bluetooth group does not exist" do
+    it "reports OK when bluetooth group does not exist" do
       allow(Etc).to receive(:getgrnam).with("bluetooth").and_raise(ArgumentError)
 
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] Bluetooth group")
-      expect(result[:stdout]).to include("does not exist")
+      expect(result[:stdout]).to include("  OK  Bluetooth group")
     end
   end
 
   describe "bluetoothd version check" do
-    it "reports info with version number" do
+    it "reports OK with version number" do
       result = capture_output { described_class.new(make_options).execute }
 
-      expect(result[:stdout]).to include("[info] BlueZ version")
-      expect(result[:stdout]).to include("5.66")
+      expect(result[:stdout]).to include("  OK  BlueZ version (5.66)")
     end
 
     it "skips when bluetoothd command not found" do
@@ -382,7 +380,7 @@ RSpec.describe RBLE::CLI::Doctor do
       end
 
       # D-Bus check should report the error
-      expect(result[:stdout]).to include("[error] D-Bus access")
+      expect(result[:stdout]).to include("FAIL  D-Bus access")
       # Other checks should still run
       expect(result[:stdout]).to include("Kernel module")
       expect(result[:stdout]).to include("Bluetooth adapter")
