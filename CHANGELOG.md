@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.2] - 2026-02-06
+
+### Fixed
+
+- `Time#iso8601` error on Ruby 3.2/3.3 in JSON monitor output (added missing `require 'time'`)
+- BlueZ adapter test no longer fails in CI when D-Bus socket exists but BlueZ service is not running
+- `rble doctor` no longer crashes on macOS due to unconditional `ruby-dbus` require
+- macOS CI bundle install failure caused by frozen lockfile mismatch (use `install_if` for `ruby-dbus`)
+- `rble adapter` help showed doubled namespace (`rble rble adapter`)
+- Disabled ANSI color in CLI help output for consistent readability
+
 ## [0.6.1] - 2026-02-06
 
 ### Fixed
