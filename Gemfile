@@ -5,7 +5,9 @@ source 'https://rubygems.org'
 gemspec
 
 # BlueZ backend dependency (Linux only)
-gem 'ruby-dbus', '~> 0.25' if RUBY_PLATFORM.include?('linux')
+install_if -> { RUBY_PLATFORM.include?('linux') } do
+  gem 'ruby-dbus', '~> 0.25'
+end
 
 group :development, :test do
   gem 'rake', '~> 13.0'

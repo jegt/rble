@@ -58,7 +58,11 @@ RSpec.describe RBLE::Backend::BlueZ do
   private
 
   def dbus_available?
-    File.exist?('/var/run/dbus/system_bus_socket')
+    return false unless File.exist?('/var/run/dbus/system_bus_socket')
+
+    system('dbus-send', '--system', '--print-reply', '--dest=org.bluez',
+           '/org/bluez', 'org.freedesktop.DBus.Introspectable.Introspect',
+           out: File::NULL, err: File::NULL)
   end
 
   def bluetooth_available?
