@@ -79,10 +79,11 @@ module RBLE
         end
 
         # Setup ServicesResolved watcher BEFORE calling Connect (avoid race per RESEARCH.md)
+        # Use async signal registration to avoid deadlock with running event loop
         services_queue = nil
         if wait_for_services
           services_queue = Thread::Queue.new
-          props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+          async_register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
             next unless interface == DEVICE_INTERFACE
             if changed.key?('ServicesResolved') && changed['ServicesResolved'] == true
               services_queue.push(true)
@@ -120,8 +121,8 @@ module RBLE
 
           true
         ensure
-          # Unsubscribe signal handler
-          props_iface.on_signal('PropertiesChanged') if wait_for_services
+          # Unsubscribe signal handler asynchronously (safe while event loop runs)
+          async_unregister_signal_handler(props_iface, 'PropertiesChanged') if wait_for_services
         end
       rescue DBus::Error => e
         translate_connection_error(e, device_path)
@@ -337,7 +338,8 @@ module RBLE
       def wait_for_services_resolved(props_iface, timeout:)
         queue = Thread::Queue.new
 
-        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
+        # Use async signal registration to avoid deadlock with running event loop
+        async_register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
           next unless interface == DEVICE_INTERFACE
           if changed.key?('ServicesResolved') && changed['ServicesResolved'] == true
             queue.push(true)
@@ -348,7 +350,7 @@ module RBLE
           result = queue.pop(timeout: timeout)
           raise TimeoutError.new('ServicesResolved', timeout) if result.nil?
         ensure
-          props_iface.on_signal('PropertiesChanged')
+          async_unregister_signal_handler(props_iface, 'PropertiesChanged')
         end
       end
 

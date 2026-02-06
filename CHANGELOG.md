@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3] - 2026-02-06
+
+### Fixed
+
+- Eliminate D-Bus `on_signal` deadlock across all call sites — `on_signal` calls synchronous `AddMatch` which blocks forever when an event loop is reading the same socket
+- Scan: replace per-device `subscribe_to_device_properties_for_scan` (called after event loop starts) with a single broad pathless `PropertiesChanged` match rule registered before event loop
+- Connect: replace synchronous `on_signal`/`remove_match` in `async_connect` and `wait_for_services_resolved` with new `async_register_signal_handler` / `async_unregister_signal_handler` methods
+- Subscribe: replace `Thread.new` + `register_signal_handler` workaround in `subscribe_characteristic` with `async_register_signal_handler` (eliminates orphaned threads)
+- Cache invalidation: reorder `setup_cache_invalidation_handler` to run before event loop starts in `start_event_loop`
+
+### Added
+
+- `DBusSession#async_register_signal_handler` — splits `on_signal` into local handler registration + async D-Bus `AddMatch` call, safe to call while event loop is running
+- `DBusSession#async_unregister_signal_handler` — same pattern for `RemoveMatch`
+
+### Removed
+
+- `subscribe_to_device_properties_for_scan` method (replaced by broad match rule)
+
 ## [0.6.2] - 2026-02-06
 
 ### Fixed

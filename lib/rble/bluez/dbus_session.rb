@@ -89,9 +89,12 @@ module RBLE
           raise Error, 'Cannot start event loop: not connected' unless @connection&.connected?
           return if @event_loop&.running?
 
+          # Register handlers BEFORE starting event loop — avoids synchronous
+          # AddMatch deadlock with the event loop reading the same socket.
+          setup_cache_invalidation_handler
+
           @event_loop = EventLoop.new
           @event_loop.start(@connection.bus)
-          setup_cache_invalidation_handler
         end
       end
 
@@ -215,6 +218,90 @@ module RBLE
         return 0 unless event_loop
 
         event_loop.drain_events(&block)
+      end
+
+      # Register a signal handler asynchronously (safe while event loop is running).
+      #
+      # Splits on_signal into two steps:
+      # 1. Local handler registration (immediate, no D-Bus I/O)
+      # 2. D-Bus AddMatch message (async via event loop)
+      #
+      # @param proxy_iface [DBus::ProxyObjectInterface] The interface to watch
+      # @param signal_name [String] Signal name (e.g., 'PropertiesChanged')
+      # @param timeout [Numeric] Timeout for AddMatch acknowledgement
+      # @yield [*params] Called when matching signal arrives
+      # @return [void]
+      def async_register_signal_handler(proxy_iface, signal_name, timeout: 5, &block)
+        bus = proxy_iface.object.bus
+        mr = DBus::MatchRule.new.from_signal(proxy_iface, signal_name)
+        mrs = mr.to_s
+
+        # Step 1: Register handler locally (no D-Bus I/O)
+        # Call Connection#add_match directly, bypassing BusConnection's synchronous override
+        DBus::Connection.instance_method(:add_match).bind_call(bus, mrs) do |msg|
+          block.call(*msg.params)
+        end
+
+        # Step 2: Send AddMatch to D-Bus daemon asynchronously
+        async_call("AddMatch(#{signal_name})", timeout: timeout) do |queue, _request_id, cancelled|
+          msg = DBus::Message.new(DBus::Message::METHOD_CALL)
+          msg.path = '/org/freedesktop/DBus'
+          msg.interface = 'org.freedesktop.DBus'
+          msg.destination = 'org.freedesktop.DBus'
+          msg.member = 'AddMatch'
+          msg.sender = bus.unique_name
+          msg.add_param('s', mrs)
+
+          bus.send_sync_or_async(msg) do |reply|
+            next if cancelled[0]
+            if reply.is_a?(DBus::Error)
+              queue.push([reply, nil])
+            else
+              queue.push([nil, :ok])
+            end
+          end
+        end
+
+        @registered_handlers << [proxy_iface, signal_name]
+      end
+
+      # Unregister a signal handler asynchronously (safe while event loop is running).
+      #
+      # @param proxy_iface [DBus::ProxyObjectInterface] The interface
+      # @param signal_name [String] Signal name
+      # @param timeout [Numeric] Timeout for RemoveMatch acknowledgement
+      # @return [void]
+      def async_unregister_signal_handler(proxy_iface, signal_name, timeout: 5)
+        bus = proxy_iface.object.bus
+        mr = DBus::MatchRule.new.from_signal(proxy_iface, signal_name)
+        mrs = mr.to_s
+
+        # Step 1: Remove handler locally (no D-Bus I/O)
+        DBus::Connection.instance_method(:remove_match).bind_call(bus, mrs)
+
+        # Step 2: Send RemoveMatch to D-Bus daemon asynchronously
+        async_call("RemoveMatch(#{signal_name})", timeout: timeout) do |queue, _request_id, cancelled|
+          msg = DBus::Message.new(DBus::Message::METHOD_CALL)
+          msg.path = '/org/freedesktop/DBus'
+          msg.interface = 'org.freedesktop.DBus'
+          msg.destination = 'org.freedesktop.DBus'
+          msg.member = 'RemoveMatch'
+          msg.sender = bus.unique_name
+          msg.add_param('s', mrs)
+
+          bus.send_sync_or_async(msg) do |reply|
+            next if cancelled[0]
+            if reply.is_a?(DBus::Error)
+              queue.push([reply, nil])
+            else
+              queue.push([nil, :ok])
+            end
+          end
+        end
+
+        @registered_handlers.delete_if { |pi, sn| pi == proxy_iface && sn == signal_name }
+      rescue StandardError => e
+        RBLE.logger&.debug("[RBLE] async_unregister_signal_handler error: #{e.message}")
       end
 
       private

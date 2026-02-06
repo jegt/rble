@@ -11,11 +11,26 @@ RSpec.describe RBLE::BlueZ::AsyncConnectionOperations do
       include RBLE::BlueZ::AsyncIntrospection
       include RBLE::BlueZ::AsyncConnectionOperations
 
-      attr_accessor :service, :introspection_cache
+      attr_accessor :service, :introspection_cache, :registered_handlers
 
       def initialize(service = nil)
         @service = service
         @introspection_cache = {}
+        @registered_handlers = []
+      end
+
+      # Stub async signal handler methods used by AsyncConnectionOperations.
+      # In production these live on DBusSession; in tests we delegate to on_signal.
+      def async_register_signal_handler(proxy_iface, signal_name, timeout: 5, &block)
+        proxy_iface.on_signal(signal_name, &block)
+        @registered_handlers << [proxy_iface, signal_name]
+      end
+
+      def async_unregister_signal_handler(proxy_iface, signal_name, timeout: 5)
+        proxy_iface.on_signal(signal_name) # no block = unregister
+        @registered_handlers.delete_if { |pi, sn| pi == proxy_iface && sn == signal_name }
+      rescue StandardError
+        nil
       end
     end
   end

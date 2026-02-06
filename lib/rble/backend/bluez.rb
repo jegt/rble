@@ -532,25 +532,22 @@ module RBLE
 
         # Subscribe to PropertiesChanged signal for value updates
         # Events are enqueued to the Connection's event loop
-        # NOTE: on_signal does synchronous AddMatch which can block if event loop is running.
-        # We don't wait for registration to complete - notifications may be missed briefly
-        # but this avoids blocking the subscribe call for 0.5-1s
-        Thread.new do
-          session.register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
-            next unless interface == RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE
-            next unless changed.key?('Value')
+        # Use async registration to avoid deadlock — on_signal does synchronous
+        # AddMatch which blocks if event loop is running on the same connection.
+        session.async_register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
+          next unless interface == RBLE::BlueZ::GATT_CHARACTERISTIC_INTERFACE
+          next unless changed.key?('Value')
 
-            # Convert value bytes to binary string
-            value = changed['Value'].map(&:to_i).pack('C*')
+          # Convert value bytes to binary string
+          value = changed['Value'].map(&:to_i).pack('C*')
 
-            RBLE.logger&.debug("[RBLE] Notification received: #{char_path} (#{value.bytesize} bytes)")
-            RBLE.logger&.debug("[RBLE]   Data: #{value.bytes.map { |b| format('%02x', b) }.join(' ')}")
+          RBLE.logger&.debug("[RBLE] Notification received: #{char_path} (#{value.bytesize} bytes)")
+          RBLE.logger&.debug("[RBLE]   Data: #{value.bytes.map { |b| format('%02x', b) }.join(' ')}")
 
-            # Enqueue to Connection's event loop for thread-safe callback dispatch
-            # Using Connection's dbus_session ensures notifications are delivered
-            # even when scan session is destroyed
-            session.enqueue(:notification, char_path, { value: value, callback: callback })
-          end
+          # Enqueue to Connection's event loop for thread-safe callback dispatch
+          # Using Connection's dbus_session ensures notifications are delivered
+          # even when scan session is destroyed
+          session.enqueue(:notification, char_path, { value: value, callback: callback })
         end
 
         # Store subscription for tracking (thread-safe)
@@ -857,6 +854,8 @@ module RBLE
       end
 
       # Setup signal handlers for scanning using the scan session
+      # All handlers are registered BEFORE the event loop starts to avoid
+      # synchronous AddMatch deadlock with the event loop reading the same socket.
       # @param session [DBusSession] D-Bus session to use
       def setup_scan_signal_handlers(session)
         # Subscribe to InterfacesAdded for new device discovery
@@ -880,26 +879,29 @@ module RBLE
           end
         end
         @signal_handlers << [:interfaces_removed, object_manager]
-      end
 
-      # Subscribe to device property changes during scan
-      # @param session [DBusSession] D-Bus session to use
-      # @param device_path [String] Device path to monitor
-      def subscribe_to_device_properties_for_scan(session, device_path)
-        # Use async_introspect to avoid deadlock (event loop is running)
-        device_obj = session.async_introspect(device_path, timeout: 5)
-        props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
-
-        props_iface.on_signal('PropertiesChanged') do |interface, changed, _invalidated|
-          # Capture session to prevent race with cleanup setting it to nil
+        # Broad PropertiesChanged for ALL device property updates during scan.
+        # A pathless MatchRule matches signals from any BlueZ object path.
+        # The handler filters by @scan_adapter_path at dispatch time.
+        # Replaces per-device subscribe_to_device_properties_for_scan which called
+        # on_signal after the event loop started, causing deadlock.
+        mr = DBus::MatchRule.new
+        mr.type = 'signal'
+        mr.interface = 'org.freedesktop.DBus.Properties'
+        mr.member = 'PropertiesChanged'
+        bus = session.bus
+        bus.add_match(mr) do |msg|
           scan_session = @scan_session
-          if interface == RBLE::BlueZ::DEVICE_INTERFACE && scan_session
-            scan_session.enqueue(:properties_changed, device_path, changed)
-          end
+          next unless scan_session
+          next unless @scan_adapter_path && msg.path&.start_with?(@scan_adapter_path)
+
+          interface_name = msg.params[0]
+          changed = msg.params[1]
+          next unless interface_name == RBLE::BlueZ::DEVICE_INTERFACE
+
+          scan_session.enqueue(:properties_changed, msg.path, changed)
         end
-        @signal_handlers << [:properties_changed, props_iface, device_path]
-      rescue StandardError => e
-        RBLE.logger&.debug("[RBLE] Failed to subscribe to device properties for #{device_path}: #{e.class}: #{e.message}")
+        @signal_handlers << [:properties_changed_broad, mr]
       end
 
       # Start discovery on the scan session's adapter
@@ -971,11 +973,6 @@ module RBLE
           @known_devices[path] = device
           new_device
         end
-
-        # Subscribe to property changes for this device (only if monitoring updates)
-        # Skip subscription when not needed - on_signal makes synchronous D-Bus calls
-        # that can block/deadlock when called from within the event loop
-        subscribe_to_device_properties_for_scan(@scan_session, path) if is_new && @allow_duplicates && @scan_session
 
         # Callback if new device or allow_duplicates
         return unless is_new || @allow_duplicates
@@ -1173,7 +1170,8 @@ module RBLE
         device_obj = session.async_introspect(device_path, timeout: 5)
         props_iface = device_obj[RBLE::BlueZ::PROPERTIES_INTERFACE]
 
-        session.register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
+        # Use async registration to avoid deadlock with running event loop
+        session.async_register_signal_handler(props_iface, 'PropertiesChanged') do |interface, changed, _invalidated|
           session.enqueue(:properties_changed, device_path, changed) if interface == RBLE::BlueZ::DEVICE_INTERFACE
         end
 
