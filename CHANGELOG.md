@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.1] - 2026-02-06
+
+### Fixed
+
+- `rble doctor` no longer crashes with `uninitialized constant RBLE::BlueZ` (added missing require)
+- `rble doctor` output redesigned: compact OK/FAIL/WARN checklist with detailed errors at bottom
+- `rble help` and `rble tree` show clean command names (`rble scan`, `rble adapter`) instead of internal class paths
+- `rble scan` Ctrl+C reliably stops within 1 second using flag-and-wake pattern (no more potential deadlock)
+
+### Changed
+
+- `ruby-dbus` is no longer a hard gemspec dependency; only required at runtime on Linux for BlueZ backend
+- Gemspec metadata completed (documentation_uri, bug_tracker_uri)
+- Gem description updated to be more precise and technical
+
+### Added
+
+- GitHub Actions CI workflow (Ruby 3.2/3.3/3.4 on Ubuntu, Ruby 3.4 on macOS)
+
 ## [0.6.0] - 2026-02-05
 
 ### Added
