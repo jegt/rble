@@ -14,9 +14,10 @@
 # Usage: ruby verify/passive_scan.rb
 
 require_relative '../lib/rble'
+require_relative 'reason_codes'
 require 'timeout'
 
-SCRIPT_NAME = "verify/passive_scan"
+SCRIPT_NAME = 'verify/passive_scan'
 DURATION = 60
 MAX_GAP_SECONDS = 10
 
@@ -33,6 +34,7 @@ start_time = Time.now
 baseline_threads = thread_count
 baseline_fds = fd_count
 status = :FAIL
+reason = nil
 metrics = {}
 
 begin
@@ -67,31 +69,39 @@ begin
     passed_adverts = total_advertisements > 0
     passed_gap = max_gap_observed < MAX_GAP_SECONDS
 
-    metrics["Devices:"] = devices_seen.size
-    metrics["Adverts:"] = total_advertisements
-    metrics["Max gap:"] = "#{max_gap_observed.round(1)}s"
+    metrics['Devices:'] = devices_seen.size
+    metrics['Adverts:'] = total_advertisements
+    metrics['Max gap:'] = "#{max_gap_observed.round(1)}s"
 
     if devices_seen.size <= 5
-      addrs = devices_seen.map { |addr, info| "#{addr} (#{info[:name] || 'unnamed'})" }.join(", ")
-      metrics["Addresses:"] = addrs
+      addrs = devices_seen.map { |addr, info| "#{addr} (#{info[:name] || 'unnamed'})" }.join(', ')
+      metrics['Addresses:'] = addrs
     else
-      metrics["Addresses:"] = "#{devices_seen.size} unique"
+      metrics['Addresses:'] = "#{devices_seen.size} unique"
     end
 
     unless passed_adverts
-      $stderr.puts "FAIL: No advertisements received in #{DURATION}s"
+      warn "FAIL: No advertisements received in #{DURATION}s"
+      reason ||= Verify::Reason::NO_ADVERTISEMENTS
     end
 
     unless passed_gap
-      $stderr.puts "FAIL: Max gap #{max_gap_observed.round(1)}s exceeds #{MAX_GAP_SECONDS}s threshold"
+      warn "FAIL: Max gap #{max_gap_observed.round(1)}s exceeds #{MAX_GAP_SECONDS}s threshold"
+      reason ||= Verify::Reason::ADVERTISEMENT_GAP_EXCEEDED
     end
 
-    status = :PASS if passed_adverts && passed_gap
+    if passed_adverts && passed_gap
+      status = :PASS
+      reason = Verify::Reason::OK
+    end
   end
 rescue Timeout::Error
-  $stderr.puts "ERROR: Script timed out after #{DURATION * 2}s (safety net)"
-rescue => e
-  $stderr.puts "ERROR: #{e.class}: #{e.message}"
+  warn "ERROR: Script timed out after #{DURATION * 2}s (safety net)"
+  reason ||= Verify::Reason::TIMEOUT
+rescue StandardError => e
+  warn "ERROR: #{e.class}: #{e.message}"
+  metrics['Error:'] = "#{e.class}: #{e.message}"
+  reason ||= Verify::Reason::EXCEPTION
 ensure
   # Allow GC to finalize D-Bus socket objects before measuring FDs
   GC.start
@@ -105,27 +115,31 @@ ensure
 
   # Check for resource leaks
   if thread_delta > 1
-    $stderr.puts "LEAK: #{thread_delta} threads not cleaned up"
+    warn "LEAK: #{thread_delta} threads not cleaned up"
     status = :FAIL
+    reason = Verify::Reason::THREAD_LEAK
   end
   if fd_delta > 2
-    $stderr.puts "LEAK: #{fd_delta} file descriptors not closed"
+    warn "LEAK: #{fd_delta} file descriptors not closed"
     status = :FAIL
+    reason = Verify::Reason::FD_LEAK
   end
+
+  metrics['Reason:'] = reason if reason
 
   # Print structured summary
   puts
-  puts "=" * 60
+  puts '=' * 60
   puts "VERIFICATION: #{SCRIPT_NAME}"
-  puts "-" * 60
+  puts '-' * 60
   puts "Status:       #{status}"
   puts "Duration:     #{elapsed}s"
   metrics.each { |k, v| puts "#{k.ljust(14)}#{v}" }
-  puts "-" * 60
-  puts "Resources:"
+  puts '-' * 60
+  puts 'Resources:'
   puts "  Threads:    #{baseline_threads} -> #{final_threads} (delta: #{thread_delta})"
   puts "  FDs:        #{baseline_fds} -> #{final_fds} (delta: #{fd_delta})"
-  puts "=" * 60
+  puts '=' * 60
 
   exit(status == :PASS ? 0 : 1)
 end

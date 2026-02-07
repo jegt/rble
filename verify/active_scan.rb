@@ -14,9 +14,10 @@
 # Usage: ruby verify/active_scan.rb
 
 require_relative '../lib/rble'
+require_relative 'reason_codes'
 require 'timeout'
 
-SCRIPT_NAME = "verify/active_scan"
+SCRIPT_NAME = 'verify/active_scan'
 DURATION = 15
 
 def thread_count
@@ -32,6 +33,7 @@ start_time = Time.now
 baseline_threads = thread_count
 baseline_fds = fd_count
 status = :FAIL
+reason = nil
 metrics = {}
 
 begin
@@ -50,33 +52,41 @@ begin
 
     strongest = devices.max_by { |_, info| info[:rssi] || -999 }
 
-    metrics["Devices:"] = total
-    metrics["Named:"] = named_count
-    metrics["With RSSI:"] = rssi_count
+    metrics['Devices:'] = total
+    metrics['Named:'] = named_count
+    metrics['With RSSI:'] = rssi_count
 
     if strongest
       addr, info = strongest
       label = info[:name] || addr
-      metrics["Strongest:"] = "#{label} (#{info[:rssi]} dBm)"
+      metrics['Strongest:'] = "#{label} (#{info[:rssi]} dBm)"
     end
 
     passed_found = total > 0
     passed_named = named_count > 0
 
     unless passed_found
-      $stderr.puts "FAIL: No devices found in #{DURATION}s"
+      warn "FAIL: No devices found in #{DURATION}s"
+      reason ||= Verify::Reason::NO_DEVICES_FOUND
     end
 
     unless passed_named
-      $stderr.puts "FAIL: No devices with names found"
+      warn 'FAIL: No devices with names found'
+      reason ||= Verify::Reason::NO_NAMED_DEVICES
     end
 
-    status = :PASS if passed_found && passed_named
+    if passed_found && passed_named
+      status = :PASS
+      reason = Verify::Reason::OK
+    end
   end
 rescue Timeout::Error
-  $stderr.puts "ERROR: Script timed out after #{DURATION * 2}s (safety net)"
-rescue => e
-  $stderr.puts "ERROR: #{e.class}: #{e.message}"
+  warn "ERROR: Script timed out after #{DURATION * 2}s (safety net)"
+  reason ||= Verify::Reason::TIMEOUT
+rescue StandardError => e
+  warn "ERROR: #{e.class}: #{e.message}"
+  metrics['Error:'] = "#{e.class}: #{e.message}"
+  reason ||= Verify::Reason::EXCEPTION
 ensure
   # Allow GC to finalize D-Bus socket objects before measuring FDs
   GC.start
@@ -90,27 +100,31 @@ ensure
 
   # Check for resource leaks
   if thread_delta > 1
-    $stderr.puts "LEAK: #{thread_delta} threads not cleaned up"
+    warn "LEAK: #{thread_delta} threads not cleaned up"
     status = :FAIL
+    reason = Verify::Reason::THREAD_LEAK
   end
   if fd_delta > 2
-    $stderr.puts "LEAK: #{fd_delta} file descriptors not closed"
+    warn "LEAK: #{fd_delta} file descriptors not closed"
     status = :FAIL
+    reason = Verify::Reason::FD_LEAK
   end
+
+  metrics['Reason:'] = reason if reason
 
   # Print structured summary
   puts
-  puts "=" * 60
+  puts '=' * 60
   puts "VERIFICATION: #{SCRIPT_NAME}"
-  puts "-" * 60
+  puts '-' * 60
   puts "Status:       #{status}"
   puts "Duration:     #{elapsed}s"
   metrics.each { |k, v| puts "#{k.ljust(14)}#{v}" }
-  puts "-" * 60
-  puts "Resources:"
+  puts '-' * 60
+  puts 'Resources:'
   puts "  Threads:    #{baseline_threads} -> #{final_threads} (delta: #{thread_delta})"
   puts "  FDs:        #{baseline_fds} -> #{final_fds} (delta: #{fd_delta})"
-  puts "=" * 60
+  puts '=' * 60
 
   exit(status == :PASS ? 0 : 1)
 end
