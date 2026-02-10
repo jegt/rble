@@ -35,6 +35,8 @@ module RBLE
                            desc: "Minimum RSSI threshold (e.g., -70)"
       method_option :passive, type: :boolean, default: false,
                               desc: "Use passive scanning (no scan requests sent)"
+      method_option :unique, type: :boolean, aliases: "-u", default: false,
+                             desc: "Show each device only once (suppress duplicate advertisements)"
       def scan
         require_relative 'cli/scan'
         Scan.new(options).execute

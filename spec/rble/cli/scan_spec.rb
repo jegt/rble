@@ -26,7 +26,7 @@ RSpec.describe RBLE::CLI::Scan do
   end
 
   def make_options(overrides = {})
-    defaults = { "json" => false, "verbose" => false, "timeout" => 1, "name" => nil, "rssi" => nil, "passive" => false }
+    defaults = { "json" => false, "verbose" => false, "timeout" => 1, "name" => nil, "rssi" => nil, "passive" => false, "unique" => false }
     Thor::CoreExt::HashWithIndifferentAccess.new(defaults.merge(overrides))
   end
 
@@ -184,6 +184,48 @@ RSpec.describe RBLE::CLI::Scan do
       result = capture_output { scan.execute }
 
       expect(result[:stderr]).not_to include("No devices found matching filters")
+    end
+
+    context "with --unique flag" do
+      let(:repeated_devices) do
+        [
+          RBLE::Device.new(address: "AA:BB:CC:DD:EE:FF", name: "Polar H10", rssi: -65, address_type: "public"),
+          RBLE::Device.new(address: "AA:BB:CC:DD:EE:FF", name: "Polar H10", rssi: -63, address_type: "public"),
+          RBLE::Device.new(address: "AA:BB:CC:DD:EE:FF", name: "Polar H10", rssi: -67, address_type: "public"),
+          RBLE::Device.new(address: "11:22:33:44:55:66", name: "Ruuvi 1234", rssi: -80, address_type: "random")
+        ]
+      end
+
+      before do
+        allow(scanner).to receive(:start) do |&block|
+          repeated_devices.each { |d| block.call(d) }
+        end
+      end
+
+      it "outputs each device address only once" do
+        scan = described_class.new(make_options("unique" => true))
+        result = capture_output { scan.execute }
+
+        lines = result[:stdout].strip.split("\n")
+        expect(lines.size).to eq(2)
+        expect(lines[0]).to include("Polar H10")
+        expect(lines[1]).to include("Ruuvi 1234")
+      end
+
+      it "still counts all advertisements in summary" do
+        scan = described_class.new(make_options("unique" => true))
+        result = capture_output { scan.execute }
+
+        expect(result[:stderr]).to match(/Discovered 2 devices \(4 advertisements\)/)
+      end
+
+      it "outputs all advertisements without the flag" do
+        scan = described_class.new(make_options("unique" => false))
+        result = capture_output { scan.execute }
+
+        lines = result[:stdout].strip.split("\n")
+        expect(lines.size).to eq(4)
+      end
     end
   end
 

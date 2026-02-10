@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
+require 'rble/company_ids'
+
 module RBLE
   module CLI
     module Formatters
       class Text
         def device(device)
-          name = truncate(device.name || "(unknown)", 25)
+          name = truncate(device.name || company_label(device) || "(unknown)", 25)
           rssi = device.rssi || 0
           puts format("%-17s  %-25s  %4d dBm  %s", device.address, name, rssi, device.address_type)
         end
@@ -134,6 +136,14 @@ module RBLE
               "Unknown #{type_label} [#{uuid}]"
             end
           end
+        end
+
+        def company_label(device)
+          return nil if device.manufacturer_data.empty?
+
+          company_id = device.manufacturer_data.keys.first
+          name = RBLE::CompanyIdentifiers.resolve(company_id)
+          name ? "(#{name})" : nil
         end
 
         def truncate(str, max)

@@ -2,18 +2,27 @@
 
 require 'json'
 require 'time'
+require 'rble/company_ids'
 
 module RBLE
   module CLI
     module Formatters
       class Json
         def device(device)
-          puts JSON.generate({
+          data = {
             address: device.address,
             name: device.name,
             rssi: device.rssi,
             address_type: device.address_type
-          })
+          }
+
+          if device.manufacturer_data.any?
+            company_id = device.manufacturer_data.keys.first
+            data[:company_id] = company_id
+            data[:company] = RBLE::CompanyIdentifiers.resolve(company_id)
+          end
+
+          puts JSON.generate(data)
         end
 
         def status(info)

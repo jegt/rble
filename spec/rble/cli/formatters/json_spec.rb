@@ -17,8 +17,8 @@ RSpec.describe RBLE::CLI::Formatters::Json do
     $stdout = original
   end
 
-  def make_device(address: "AA:BB:CC:DD:EE:FF", name: nil, rssi: nil, address_type: "public")
-    RBLE::Device.new(address: address, name: name, rssi: rssi, address_type: address_type)
+  def make_device(address: "AA:BB:CC:DD:EE:FF", name: nil, rssi: nil, address_type: "public", manufacturer_data: {})
+    RBLE::Device.new(address: address, name: name, rssi: rssi, address_type: address_type, manufacturer_data: manufacturer_data)
   end
 
   describe "#device" do
@@ -56,6 +56,42 @@ RSpec.describe RBLE::CLI::Formatters::Json do
       parsed = JSON.parse(output)
 
       expect(parsed["rssi"]).to be_nil
+    end
+
+    it "includes company_id and company when manufacturer data present" do
+      device = make_device(rssi: -65, manufacturer_data: { 0x0075 => [0x01, 0x02] })
+      output = capture_stdout { formatter.device(device) }
+      parsed = JSON.parse(output)
+
+      expect(parsed["company_id"]).to eq(0x0075)
+      expect(parsed["company"]).to eq("Samsung")
+    end
+
+    it "includes company_id and company for Apple manufacturer data" do
+      device = make_device(rssi: -65, manufacturer_data: { 0x004C => [0x01, 0x02] })
+      output = capture_stdout { formatter.device(device) }
+      parsed = JSON.parse(output)
+
+      expect(parsed["company_id"]).to eq(0x004C)
+      expect(parsed["company"]).to eq("Apple")
+    end
+
+    it "includes company_id with nil company for unknown manufacturer" do
+      device = make_device(rssi: -65, manufacturer_data: { 0xFFFF => [0x01] })
+      output = capture_stdout { formatter.device(device) }
+      parsed = JSON.parse(output)
+
+      expect(parsed["company_id"]).to eq(0xFFFF)
+      expect(parsed["company"]).to be_nil
+    end
+
+    it "omits company fields when no manufacturer data" do
+      device = make_device(name: "Test", rssi: -50)
+      output = capture_stdout { formatter.device(device) }
+      parsed = JSON.parse(output)
+
+      expect(parsed).not_to have_key("company_id")
+      expect(parsed).not_to have_key("company")
     end
 
     it "outputs one JSON object per line (NDJSON)" do

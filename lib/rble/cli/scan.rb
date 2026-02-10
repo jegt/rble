@@ -31,7 +31,9 @@ module RBLE
             next unless matches_filters?(device)
 
             @advertisement_count += 1
-            @seen_addresses.add(device.address)
+            is_new = @seen_addresses.add?(device.address)
+            next if @options["unique"] && !is_new
+
             @formatter.device(device)
           end
         rescue RBLE::Error => e
