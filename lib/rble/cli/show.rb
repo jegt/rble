@@ -1,10 +1,13 @@
 # frozen_string_literal: true
 
 require 'rble/gatt/uuid_database'
+require_relative 'characteristic_helpers'
 
 module RBLE
   module CLI
     class Show
+      include CharacteristicHelpers
+
       def initialize(options)
         @options = options
         @formatter = options["json"] ? Formatters::Json.new : Formatters::Text.new
@@ -38,21 +41,6 @@ module RBLE
       end
 
       private
-
-      def connect_with_retry(address, timeout:)
-        $stderr.puts "Connecting to #{address}..."
-        RBLE.connect(address, timeout: timeout)
-      rescue RBLE::DeviceNotFoundError
-        raise # No retry for device not found
-      rescue RBLE::ConnectionTimeoutError, RBLE::ConnectionFailed
-        $stderr.puts "Connection failed, retrying..."
-        begin
-          RBLE.connect(address, timeout: timeout)
-        rescue RBLE::ConnectionTimeoutError, RBLE::ConnectionFailed => e
-          $stderr.puts "Error: #{e.message}"
-          exit 1
-        end
-      end
 
       def build_tree_data(address, connection, services, backend)
         device_name = begin

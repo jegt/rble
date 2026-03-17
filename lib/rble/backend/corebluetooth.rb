@@ -39,6 +39,9 @@ module RBLE
         # Thread safety: protects shared state accessed from multiple threads
         # (event_processor_thread and user thread)
         @state_mutex = Mutex.new
+
+        # Best-effort cleanup on process exit
+        at_exit { cleanup_all_connections }
       end
 
       # Start the subprocess if not running
@@ -85,24 +88,21 @@ module RBLE
 
         # Wait for response in response queue (async events handled by event_processor_thread)
         deadline = Time.now + timeout
-        while Time.now < deadline
-          begin
-            response = @response_queue.pop(true) # non-blocking
-            if response[:id] == request_id
-              handle_response_error(response) if response[:error]
-              return response[:result]
-            else
-              # Not our response, put it back (shouldn't happen often with single-threaded requests)
-              @response_queue.push(response)
-              sleep 0.001
-            end
-          rescue ThreadError
-            # Queue empty, wait a bit
-            sleep 0.01
+        loop do
+          remaining = deadline - Time.now
+          raise ConnectionTimeoutError, timeout if remaining <= 0
+
+          response = @response_queue.pop(timeout: remaining)
+          raise ConnectionTimeoutError, timeout if response.nil? # timeout expired
+
+          if response[:id] == request_id
+            handle_response_error(response) if response[:error]
+            return response[:result]
+          else
+            # Not our response, put it back (shouldn't happen often with single-threaded requests)
+            @response_queue.push(response)
           end
         end
-
-        raise ConnectionTimeoutError, timeout
       end
 
       def shutdown
@@ -139,16 +139,27 @@ module RBLE
         params = { allow_duplicates: allow_duplicates }
         params[:service_uuids] = service_uuids if service_uuids
 
-        send_request('scan_start', params)
+        begin
+          send_request('scan_start', params)
+        rescue StandardError
+          @state_mutex.synchronize do
+            @scanning = false
+            @scan_callback = nil
+          end
+          raise
+        end
       end
 
       def stop_scan
         @state_mutex.synchronize { return unless @scanning }
 
-        send_request('scan_stop')
-        @state_mutex.synchronize do
-          @scanning = false
-          @scan_callback = nil
+        begin
+          send_request('scan_stop')
+        ensure
+          @state_mutex.synchronize do
+            @scanning = false
+            @scan_callback = nil
+          end
         end
       end
 
@@ -215,6 +226,7 @@ module RBLE
         @state_mutex.synchronize do
           @connected_devices.delete(device_identifier)
           @device_services.delete(device_identifier)
+          @subscriptions.delete_if { |char_id, _| char_id.start_with?(device_identifier) }
         end
 
         begin
@@ -377,12 +389,26 @@ module RBLE
       # @param connection [Connection] Connection to query
       # @return [Array<Hash>] Subscription info hashes with :uuid and :path
       def subscriptions_for_connection(connection)
+        device_uuid = connection.address
         @state_mutex.synchronize do
-          @subscriptions.map { |path, _callback| { path: path, uuid: path.split(':').last } }
+          @subscriptions.select { |path, _| path.start_with?(device_uuid) }
+                        .map { |path, _callback| { path: path, uuid: path.split(':').last } }
         end
       end
 
       private
+
+      # Best-effort disconnect of all tracked connections during process exit
+      # @return [void]
+      def cleanup_all_connections
+        connections = @state_mutex.synchronize { @connection_objects.values.dup }
+        connections.each do |conn|
+          conn.disconnect if conn.connected?
+        rescue StandardError
+          # best-effort cleanup during exit
+        end
+        shutdown if connections.any?
+      end
 
       def start_reader_thread
         @reader_thread = Thread.new do
@@ -586,6 +612,7 @@ module RBLE
         connection = @state_mutex.synchronize do
           @connected_devices.delete(uuid)
           @device_services.delete(uuid)
+          @subscriptions.delete_if { |char_id, _| char_id.start_with?(uuid) }
           @connection_objects.delete(uuid)
         end
 

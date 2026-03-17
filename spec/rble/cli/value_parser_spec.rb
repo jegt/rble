@@ -141,6 +141,44 @@ RSpec.describe RBLE::CLI::ValueParser do
         expect(described_class.parse("ffff", "\x01\x02".b)).to be_nil
       end
     end
+
+    context "malformed/truncated inputs" do
+      it "Battery Level (2a19) returns malformed for empty input" do
+        expect(described_class.parse("2a19", "".b)).to eq("malformed")
+      end
+
+      it "Heart Rate (2a37) returns malformed for 1-byte input" do
+        expect(described_class.parse("2a37", "\x00".b)).to eq("malformed")
+      end
+
+      it "Heart Rate (2a37) returns malformed for 16-bit HR with only 2 bytes" do
+        expect(described_class.parse("2a37", "\x01\x48".b)).to eq("malformed")
+      end
+
+      it "Temperature Environmental (2a6e) returns malformed for 1-byte input" do
+        expect(described_class.parse("2a6e", "\x00".b)).to eq("malformed")
+      end
+
+      it "Temperature Measurement (2a1c) returns malformed for 4-byte input" do
+        expect(described_class.parse("2a1c", "\x00\x74\x01\x00".b)).to eq("malformed")
+      end
+
+      it "Tx Power (2a07) returns malformed for empty input" do
+        expect(described_class.parse("2a07", "".b)).to eq("malformed")
+      end
+
+      it "Blood Pressure (2a35) returns malformed for 4-byte input" do
+        expect(described_class.parse("2a35", "\x00\x78\x00\x50".b)).to eq("malformed")
+      end
+
+      it "Humidity (2a6f) returns malformed for 1-byte input" do
+        expect(described_class.parse("2a6f", "\x00".b)).to eq("malformed")
+      end
+
+      it "Body Sensor Location (2a38) returns malformed for empty input" do
+        expect(described_class.parse("2a38", "".b)).to eq("malformed")
+      end
+    end
   end
 
   describe ".known?" do

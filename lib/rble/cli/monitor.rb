@@ -65,7 +65,7 @@ module RBLE
 
             $stderr.puts "Error: #{e.message}"
             $stderr.puts "Reconnecting in 2s..."
-            sleep 2
+            interruptible_sleep(2)
             next
           end
 
@@ -73,7 +73,17 @@ module RBLE
 
           $stderr.puts "Device disconnected."
           $stderr.puts "Reconnecting in 2s..."
-          sleep 2
+          interruptible_sleep(2)
+        end
+      end
+
+      # Sleep in short intervals, checking @stop flag for responsiveness
+      # @param seconds [Numeric] Total sleep duration
+      def interruptible_sleep(seconds)
+        intervals = (seconds / 0.1).ceil
+        intervals.times do
+          break if @stop
+          sleep 0.1
         end
       end
 

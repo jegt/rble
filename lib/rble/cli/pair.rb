@@ -50,6 +50,11 @@ module RBLE
       end
 
       def execute
+        if @security && !SECURITY_CAPABILITY_MAP.key?(@security)
+          $stderr.puts "Error: Invalid security level '#{@security}'. Use: #{SECURITY_CAPABILITY_MAP.keys.join(', ')}"
+          exit 1
+        end
+
         backend = RBLE::Backend.for_platform
         device_path = backend.device_path_for_address(@address)
 
@@ -77,6 +82,7 @@ module RBLE
           @formatter.pair_result(success: true, address: @address, message: "Bonded successfully")
         when :already_paired
           $stderr.puts "Device already paired"
+          @formatter.pair_result(success: true, address: @address, message: "Already paired")
         end
       rescue RBLE::DeviceNotFoundError => e
         $stderr.puts "Error: #{e.message}"

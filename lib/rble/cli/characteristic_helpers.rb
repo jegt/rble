@@ -37,8 +37,11 @@ module RBLE
       # @return [String] Full 128-bit UUID in lowercase
       def normalize_char_uuid(input)
         stripped = input.sub(/\A0x/i, '').downcase
-        if stripped.length == 4
+        case stripped.length
+        when 4
           "0000#{stripped}#{BLUETOOTH_BASE_SUFFIX}"
+        when 8
+          "#{stripped}#{BLUETOOTH_BASE_SUFFIX}"
         else
           stripped
         end

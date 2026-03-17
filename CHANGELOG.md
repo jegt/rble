@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-03-17
+
+### Fixed (Critical)
+
+- **GATT queue was dead code** (R1) — `gatt_queue` was a private method, so `respond_to?(:gatt_queue)` always returned false and all GATT operations bypassed the serialization queue. Made `gatt_queue` public.
+- **Stale subscriptions on normal disconnect** (R2) — `disconnect_device` did not clear `@subscriptions` for the device on either BlueZ or CoreBluetooth backends. This broke reconnect-resubscribe flows.
+
+### Fixed (High)
+
+- **GATT queue stop stranded callers** (R3) — `GattOperationQueue#stop` cleared the queue without notifying threads blocked on `enqueue`. Now drains pending operations and unblocks callers with a `RuntimeError`.
+- **GATT queue race condition** (R5) — `gatt_queue` accessor could create duplicate queues under concurrent access. Now protected by mutex.
+- **`@services` thread safety** (R6) — `@services` reads/writes in `Connection` are now synchronized with `@state_mutex`.
+- **CoreBluetooth busy-poll** (R8) — Replaced `sleep 0.001`/`sleep 0.01` busy-poll in `send_request` with blocking `Queue#pop(timeout:)`.
+- **Value parser bounds checking** (R4) — All binary characteristic parsers now return `"malformed"` for truncated input instead of crashing.
+- **`remaining_timeout` error messages** (R7) — Timeout errors now report the correct operation name instead of always saying "Connect".
+
+### Fixed (Medium)
+
+- **`at_exit` connection cleanup** (R9) — Both backends now register `at_exit` hooks to disconnect all tracked connections on process exit, preventing 30s device unreachability.
+- **CoreBluetooth scan state poisoning** (R12) — `start_scan` failure now resets `@scanning` to false, preventing permanent `ScanInProgressError`.
+- **CLI pair security validation** (R13) — Invalid `--security` values are now rejected with a clear error message.
+- **CLI write octal/hex rejection** (R14) — Integer parsing now enforces decimal (base 10) to prevent `010` being treated as octal `8`.
+- **Monitor reconnect sleep** (R15) — Reconnect delay is now interruptible, responding to Ctrl+C within 100ms instead of up to 2s.
+
+### Fixed (Low)
+
+- **Text formatter nil RSSI** (R17) — Shows "N/A" instead of fabricating "0 dBm" when RSSI is unknown.
+- **JSON raw bytes format** (R20) — `read_value` now uses `raw_hex` (hex string) matching `monitor_value` format. **Breaking change** for JSON consumers: `raw` (integer array) is now `raw_hex` (hex string).
+- **JSON write verified key** (R24) — `write_result` only includes `verified` key when verify was actually requested.
+- **JSON pair/unpair edge states** (R18) — `already_paired` and `not_paired` states now produce JSON output.
+- **Doctor platform guard** (R19) — Linux-specific checks are skipped on non-Linux platforms. Added `check_ruby_dbus` diagnostic.
+- **32-bit UUID handling** (R21) — `normalize_char_uuid` and `normalize_key` now handle 8-character UUID inputs.
+- **Deduplicated `connect_with_retry`** (R22) — `Show` now uses the shared `CharacteristicHelpers` version.
+- **CoreBluetooth `subscriptions_for_connection`** (R25) — Now correctly filters by the connection's device UUID instead of returning all subscriptions.
+
+### Removed
+
+- Dead `GattService` class (R23) — unused code removed.
+
+### Documentation
+
+- README: Added Linux section documenting `ruby-dbus` dependency.
+
+### Known Issues (deferred)
+
+- R10: `@stop_requested` in Scanner is not thread-safe under JRuby (no current impact under MRI).
+- R11: Post-unsubscribe notification callbacks may still fire due to async D-Bus signal delivery.
+- R16: Each connection creates two D-Bus sessions (connect-session + Connection-session). Architectural change deferred.
+
 ## [0.6.3] - 2026-02-06
 
 ### Fixed

@@ -23,6 +23,7 @@ module RBLE
         @worker_thread = nil
         @running = false
         @mutex = Mutex.new
+        @active_result_queue = nil
       end
 
       # Enqueue a GATT operation for sequential execution
@@ -71,8 +72,13 @@ module RBLE
         @worker_thread&.kill if @worker_thread&.alive?
         @worker_thread = nil
 
-        # Clear any remaining operations
-        @queue.clear
+        # Unblock caller of the currently-executing operation (if any)
+        active_rq = @active_result_queue
+        @active_result_queue = nil
+        active_rq&.push([nil, RuntimeError.new('GATT queue stopped')])
+
+        # Drain remaining operations and unblock waiting callers
+        drain_pending_operations
       end
 
       # Check if queue is running
@@ -83,6 +89,17 @@ module RBLE
 
       private
 
+      # Drain pending operations, notifying callers with an error
+      # @return [void]
+      def drain_pending_operations
+        while (item = @queue.pop(true) rescue nil)
+          next if item == :shutdown
+
+          _block, result_queue = item
+          result_queue.push([nil, RuntimeError.new('GATT queue stopped')])
+        end
+      end
+
       def worker_loop
         RBLE.logger&.debug('[RBLE] GATT operation queue started')
 
@@ -91,11 +108,14 @@ module RBLE
           break if item == :shutdown
 
           block, result_queue = item
+          @active_result_queue = result_queue
           begin
             result = block.call
             result_queue.push([result, nil])
           rescue StandardError => e
             result_queue.push([nil, e])
+          ensure
+            @active_result_queue = nil
           end
 
           # Inter-operation delay to prevent BlueZ contention

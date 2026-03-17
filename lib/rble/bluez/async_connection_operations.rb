@@ -138,14 +138,14 @@ module RBLE
         address = extract_address_from_path(device_path)
         deadline = Time.now + timeout
 
-        proxy = async_introspect(device_path, timeout: remaining_timeout(deadline, timeout))
+        proxy = async_introspect(device_path, timeout: remaining_timeout(deadline, timeout, 'Disconnect'))
         device_iface = proxy[DEVICE_INTERFACE]
 
         # Idempotent: check if not connected (use async to avoid deadlock)
-        connected = async_get_property(device_path, DEVICE_INTERFACE, 'Connected', timeout: remaining_timeout(deadline, timeout))
+        connected = async_get_property(device_path, DEVICE_INTERFACE, 'Connected', timeout: remaining_timeout(deadline, timeout, 'Disconnect'))
         return true unless connected
 
-        async_call("Disconnect(#{address})", timeout: remaining_timeout(deadline, timeout)) do |queue, _request_id, cancelled|
+        async_call("Disconnect(#{address})", timeout: remaining_timeout(deadline, timeout, 'Disconnect')) do |queue, _request_id, cancelled|
           device_iface.Disconnect do |reply|
             next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
@@ -178,19 +178,19 @@ module RBLE
       def async_start_discovery(adapter_path, filter: {}, timeout: DEFAULT_DISCOVERY_TIMEOUT)
         deadline = Time.now + timeout
 
-        proxy = async_introspect(adapter_path, timeout: remaining_timeout(deadline, timeout))
+        proxy = async_introspect(adapter_path, timeout: remaining_timeout(deadline, timeout, 'StartDiscovery'))
         adapter_iface = proxy[ADAPTER_INTERFACE]
 
         # Idempotent: check if already discovering (use async to avoid deadlock)
-        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: remaining_timeout(deadline, timeout))
+        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: remaining_timeout(deadline, timeout, 'StartDiscovery'))
         return true if discovering
 
         # Set discovery filter first if any options provided
         unless filter.empty?
-          async_set_discovery_filter(adapter_path, adapter_iface, filter, timeout: remaining_timeout(deadline, timeout))
+          async_set_discovery_filter(adapter_path, adapter_iface, filter, timeout: remaining_timeout(deadline, timeout, 'StartDiscovery'))
         end
 
-        async_call("StartDiscovery(#{adapter_path})", timeout: remaining_timeout(deadline, timeout)) do |queue, _request_id, cancelled|
+        async_call("StartDiscovery(#{adapter_path})", timeout: remaining_timeout(deadline, timeout, 'StartDiscovery')) do |queue, _request_id, cancelled|
           adapter_iface.StartDiscovery do |reply|
             next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
@@ -219,14 +219,14 @@ module RBLE
       def async_stop_discovery(adapter_path, timeout: DEFAULT_DISCOVERY_TIMEOUT)
         deadline = Time.now + timeout
 
-        proxy = async_introspect(adapter_path, timeout: remaining_timeout(deadline, timeout))
+        proxy = async_introspect(adapter_path, timeout: remaining_timeout(deadline, timeout, 'StopDiscovery'))
         adapter_iface = proxy[ADAPTER_INTERFACE]
 
         # Idempotent: check if not discovering (use async to avoid deadlock)
-        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: remaining_timeout(deadline, timeout))
+        discovering = async_get_property(adapter_path, ADAPTER_INTERFACE, 'Discovering', timeout: remaining_timeout(deadline, timeout, 'StopDiscovery'))
         return true unless discovering
 
-        async_call("StopDiscovery(#{adapter_path})", timeout: remaining_timeout(deadline, timeout)) do |queue, _request_id, cancelled|
+        async_call("StopDiscovery(#{adapter_path})", timeout: remaining_timeout(deadline, timeout, 'StopDiscovery')) do |queue, _request_id, cancelled|
           adapter_iface.StopDiscovery do |reply|
             next if cancelled[0]  # Discard late callback
             if reply.is_a?(DBus::Error)
@@ -328,9 +328,9 @@ module RBLE
       # @param original_timeout [Numeric] Original timeout for error message
       # @return [Numeric] Remaining seconds (minimum 0.1 to allow one more attempt)
       # @raise [TimeoutError] if deadline has passed
-      def remaining_timeout(deadline, original_timeout)
+      def remaining_timeout(deadline, original_timeout, operation = 'Connect')
         remaining = deadline - Time.now
-        raise TimeoutError.new('Connect', original_timeout) if remaining <= 0
+        raise TimeoutError.new(operation, original_timeout) if remaining <= 0
         [remaining, 0.1].max
       end
 

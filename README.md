@@ -48,6 +48,22 @@ cd $(bundle info rble --path)/ext/macos_ble
 swift build -c release
 ```
 
+### Linux
+
+On Linux, the BlueZ backend requires the `ruby-dbus` gem. If using Bundler, add it to your Gemfile:
+
+```ruby
+install_if -> { RUBY_PLATFORM.include?('linux') } do
+  gem 'ruby-dbus', '~> 0.25'
+end
+```
+
+For standalone CLI installation:
+
+```bash
+gem install ruby-dbus
+```
+
 ### Linux Permissions
 
 On Linux, ensure your user has permission to access Bluetooth. Either:

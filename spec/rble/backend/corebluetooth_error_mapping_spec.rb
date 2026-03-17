@@ -94,6 +94,80 @@ RSpec.describe RBLE::Backend::CoreBluetooth, "error mapping" do
     end
   end
 
+  describe '#cleanup_all_connections' do
+    before do
+      backend.instance_variable_set(:@state_mutex, Mutex.new)
+      backend.instance_variable_set(:@connection_objects, {})
+    end
+
+    it 'disconnects all tracked connections' do
+      conn = double('Connection', connected?: true)
+      allow(conn).to receive(:disconnect)
+      allow(backend).to receive(:shutdown)
+
+      backend.instance_variable_get(:@connection_objects)['uuid1'] = conn
+
+      backend.send(:cleanup_all_connections)
+
+      expect(conn).to have_received(:disconnect)
+      expect(backend).to have_received(:shutdown)
+    end
+
+    it 'tolerates errors from individual connections' do
+      conn1 = double('Connection', connected?: true)
+      conn2 = double('Connection', connected?: true)
+      allow(conn1).to receive(:disconnect).and_raise(RuntimeError)
+      allow(conn2).to receive(:disconnect)
+      allow(backend).to receive(:shutdown)
+
+      backend.instance_variable_get(:@connection_objects)['uuid1'] = conn1
+      backend.instance_variable_get(:@connection_objects)['uuid2'] = conn2
+
+      expect { backend.send(:cleanup_all_connections) }.not_to raise_error
+      expect(conn2).to have_received(:disconnect)
+    end
+  end
+
+  describe 'subscription cleanup on disconnect' do
+    before do
+      # Initialize required state
+      backend.instance_variable_set(:@state_mutex, Mutex.new)
+      backend.instance_variable_set(:@connected_devices, {})
+      backend.instance_variable_set(:@device_services, {})
+      backend.instance_variable_set(:@subscriptions, {})
+      backend.instance_variable_set(:@connection_objects, {})
+    end
+
+    it 'clears subscriptions in disconnect_device' do
+      uuid = 'AAAA-BBBB-CCCC'
+      backend.instance_variable_get(:@connected_devices)[uuid] = true
+      backend.instance_variable_get(:@subscriptions)["#{uuid}:180d:2a37"] = proc {}
+      backend.instance_variable_get(:@subscriptions)["#{uuid}:180d:2a38"] = proc {}
+      other_uuid = 'DDDD-EEEE-FFFF'
+      backend.instance_variable_get(:@subscriptions)["#{other_uuid}:180d:2a37"] = proc {}
+
+      # Stub send_request to avoid subprocess interaction
+      allow(backend).to receive(:send_request)
+      backend.disconnect_device(uuid)
+
+      subs = backend.instance_variable_get(:@subscriptions)
+      expect(subs.keys).to eq(["#{other_uuid}:180d:2a37"])
+    end
+
+    it 'clears subscriptions in handle_disconnected' do
+      uuid = 'AAAA-BBBB-CCCC'
+      backend.instance_variable_get(:@connected_devices)[uuid] = true
+      conn = double('Connection', handle_disconnect: true)
+      backend.instance_variable_get(:@connection_objects)[uuid] = conn
+      backend.instance_variable_get(:@subscriptions)["#{uuid}:180d:2a37"] = proc {}
+
+      backend.send(:handle_disconnected, { 'uuid' => uuid, 'reason' => 'link_loss' })
+
+      subs = backend.instance_variable_get(:@subscriptions)
+      expect(subs).to be_empty
+    end
+  end
+
   describe "#translate_error" do
     def translate(message)
       error = StandardError.new(message)

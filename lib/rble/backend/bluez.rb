@@ -30,6 +30,9 @@ module RBLE
         # Thread safety: protects shared state accessed from multiple threads
         # (D-Bus signal handlers run on rble-dbus-loop thread, user code on main thread)
         @state_mutex = Mutex.new
+
+        # Best-effort cleanup on process exit
+        at_exit { cleanup_all_connections }
       end
 
       # Start scanning for BLE devices
@@ -292,6 +295,7 @@ module RBLE
           dev = @connected_devices.delete(device_path)
           sess = @device_sessions.delete(device_path)
           @device_services.delete(device_path)
+          @subscriptions.delete_if { |char_path, _| char_path.start_with?(device_path) }
           [dev, sess]
         end
         return unless device
@@ -769,6 +773,17 @@ module RBLE
       end
 
       private
+
+      # Best-effort disconnect of all tracked connections during process exit
+      # @return [void]
+      def cleanup_all_connections
+        connections = @state_mutex.synchronize { @connection_objects.values.dup }
+        connections.each do |conn|
+          conn.disconnect if conn.connected?
+        rescue StandardError
+          # best-effort cleanup during exit
+        end
+      end
 
       # Check if a device is already paired via D-Bus properties
       # @param device_path [String] D-Bus device path

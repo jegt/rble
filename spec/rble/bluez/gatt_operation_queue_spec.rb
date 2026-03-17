@@ -37,6 +37,59 @@ RSpec.describe RBLE::BlueZ::GattOperationQueue do
       queue.stop
       expect(queue.running?).to be false
     end
+
+    it 'unblocks threads waiting on enqueue' do
+      queue.start
+
+      # Start a thread that will block on enqueue
+      error = nil
+      thread = Thread.new do
+        queue.enqueue do
+          sleep 5 # simulate long-running operation
+        end
+      rescue RuntimeError => e
+        error = e
+      end
+
+      # Give thread time to block on pop
+      sleep 0.05
+      queue.stop
+
+      thread.join(2)
+      # The thread should have been unblocked by stop draining pending ops
+      # OR the operation was already executing and was killed with the worker
+      expect(thread.alive?).to be false
+    end
+
+    it 'unblocks multiple waiting threads on stop' do
+      queue.start
+
+      # Block the queue with a long operation
+      blocker = Thread.new do
+        queue.enqueue { sleep 5 }
+      rescue RuntimeError
+        # expected
+      end
+
+      sleep 0.05
+
+      # Queue up more operations that will be pending
+      errors = []
+      waiters = 3.times.map do
+        Thread.new do
+          queue.enqueue { :result }
+        rescue RuntimeError => e
+          errors << e
+        end
+      end
+
+      sleep 0.05
+      queue.stop
+
+      [blocker, *waiters].each { |t| t.join(2) }
+      # All pending waiters should have received errors
+      expect(errors).to all(have_attributes(message: 'GATT queue stopped'))
+    end
   end
 
   describe '#enqueue' do

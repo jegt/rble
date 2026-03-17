@@ -178,9 +178,9 @@ module RBLE
       end
 
       def parse_integer(value)
-        Integer(value)
+        Integer(value, 10)
       rescue ArgumentError
-        $stderr.puts "Error: Invalid integer: '#{value}'"
+        $stderr.puts "Error: Invalid integer: '#{value}'. Use decimal digits only."
         exit 1
       end
 

@@ -141,7 +141,7 @@ RSpec.describe RBLE::CLI::Read do
       expect(parsed["characteristic"]["uuid"]).to eq("00002a19-0000-1000-8000-00805f9b34fb")
       expect(parsed["characteristic"]["name"]).to eq("Battery Level")
       expect(parsed["characteristic"]["value"]).to eq("95%")
-      expect(parsed["characteristic"]["raw"]).to eq([95])
+      expect(parsed["characteristic"]["raw_hex"]).to eq("5f")
     end
   end
 

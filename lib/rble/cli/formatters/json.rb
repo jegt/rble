@@ -56,7 +56,7 @@ module RBLE
               uuid: uuid,
               name: name,
               value: formatted,
-              raw: raw.bytes
+              raw_hex: raw.bytes.map { |b| format("%02x", b) }.join
             }
           })
         end
@@ -71,7 +71,7 @@ module RBLE
             status: success ? "ok" : "error"
           }
           output[:written] = written_bytes.bytes if written_bytes
-          output[:verified] = verified
+          output[:verified] = verified unless verified.nil?
           puts JSON.generate(output)
         end
 

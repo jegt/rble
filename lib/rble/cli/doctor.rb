@@ -30,17 +30,26 @@ module RBLE
 
       private
 
+      def linux?
+        RUBY_PLATFORM.include?('linux')
+      end
+
       def run_checks
-        checks = %i[
-          check_kernel_module
-          check_bluetoothd_running
-          check_dbus_permissions
-          check_adapter_present
-          check_adapter_powered
-          check_rfkill
-          check_bluetooth_group
-          check_bluetoothd_version
-        ]
+        checks = %i[check_adapter_present check_adapter_powered]
+
+        if linux?
+          checks = %i[
+            check_ruby_dbus
+            check_kernel_module
+            check_bluetoothd_running
+            check_dbus_permissions
+            check_adapter_present
+            check_adapter_powered
+            check_rfkill
+            check_bluetooth_group
+            check_bluetoothd_version
+          ]
+        end
 
         checks.filter_map do |check|
           begin
@@ -120,6 +129,16 @@ module RBLE
         }
 
         puts JSON.generate(output)
+      end
+
+      # Check 0: ruby-dbus gem available (Linux only)
+      def check_ruby_dbus
+        require 'dbus'
+        { severity: :info, title: "ruby-dbus gem", message: "ruby-dbus gem is available" }
+      rescue LoadError
+        { severity: :error, title: "ruby-dbus gem",
+          message: "ruby-dbus gem is not installed. The BlueZ backend requires it.",
+          fix: "gem install ruby-dbus" }
       end
 
       # Check 1: Kernel module loaded

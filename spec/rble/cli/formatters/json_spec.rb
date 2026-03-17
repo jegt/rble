@@ -109,4 +109,71 @@ RSpec.describe RBLE::CLI::Formatters::Json do
       expect(JSON.parse(lines[1])["address"]).to eq("AA:BB:CC:DD:EE:FF")
     end
   end
+
+  describe "#read_value" do
+    it "uses raw_hex format for raw bytes" do
+      output = capture_stdout do
+        formatter.read_value(
+          address: "AA:BB:CC:DD:EE:FF",
+          uuid: "00002a19-0000-1000-8000-00805f9b34fb",
+          name: "Battery Level",
+          raw: "\x5F".b,
+          formatted: "95%"
+        )
+      end
+      parsed = JSON.parse(output)
+
+      expect(parsed["characteristic"]["raw_hex"]).to eq("5f")
+      expect(parsed["characteristic"]).not_to have_key("raw_bytes")
+    end
+
+    it "formats multi-byte raw data as contiguous hex string" do
+      output = capture_stdout do
+        formatter.read_value(
+          address: "AA:BB:CC:DD:EE:FF",
+          uuid: "00002a37-0000-1000-8000-00805f9b34fb",
+          name: "Heart Rate Measurement",
+          raw: "\x00\x48".b,
+          formatted: "72 bpm"
+        )
+      end
+      parsed = JSON.parse(output)
+
+      expect(parsed["characteristic"]["raw_hex"]).to eq("0048")
+    end
+  end
+
+  describe "#write_result" do
+    it "omits verified key when verified is nil" do
+      output = capture_stdout do
+        formatter.write_result(
+          address: "AA:BB:CC:DD:EE:FF",
+          uuid: "00002a19-0000-1000-8000-00805f9b34fb",
+          name: "Battery Level",
+          success: true,
+          verified: nil,
+          written_bytes: "\x5F".b
+        )
+      end
+      parsed = JSON.parse(output)
+
+      expect(parsed).not_to have_key("verified")
+    end
+
+    it "includes verified key when verify was requested" do
+      output = capture_stdout do
+        formatter.write_result(
+          address: "AA:BB:CC:DD:EE:FF",
+          uuid: "00002a19-0000-1000-8000-00805f9b34fb",
+          name: "Battery Level",
+          success: true,
+          verified: "95%",
+          written_bytes: "\x5F".b
+        )
+      end
+      parsed = JSON.parse(output)
+
+      expect(parsed["verified"]).to eq("95%")
+    end
+  end
 end

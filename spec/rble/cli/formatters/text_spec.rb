@@ -69,11 +69,12 @@ RSpec.describe RBLE::CLI::Formatters::Text do
       expect(output).not_to include("(Apple)")
     end
 
-    it "shows 0 dBm for nil RSSI" do
+    it "shows N/A for nil RSSI" do
       device = make_device(name: "Test")
       output = capture_stdout { formatter.device(device) }
 
-      expect(output).to include("   0 dBm")
+      expect(output).to include("N/A")
+      expect(output).not_to include("0 dBm")
     end
 
     it "truncates long names with ~ suffix" do

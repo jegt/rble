@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'rble/bluez/gatt_operation_queue'
 
 RSpec.describe RBLE::Connection do
   # Use regular double instead of instance_double because backend interface
@@ -308,6 +309,42 @@ RSpec.describe RBLE::Connection do
     end
   end
 
+  describe '#gatt_queue' do
+    it 'is a public method' do
+      expect(connection.respond_to?(:gatt_queue)).to be true
+    end
+
+    it 'returns a GattOperationQueue' do
+      queue = connection.gatt_queue
+      expect(queue).to be_a(RBLE::BlueZ::GattOperationQueue)
+      expect(queue.running?).to be true
+      queue.stop
+    end
+
+    it 'returns the same queue on repeated calls' do
+      q1 = connection.gatt_queue
+      q2 = connection.gatt_queue
+      expect(q1).to equal(q2)
+      q1.stop
+    end
+
+    it 'returns the same queue from concurrent calls' do
+      queues = []
+      mutex = Mutex.new
+
+      threads = 10.times.map do
+        Thread.new do
+          q = connection.gatt_queue
+          mutex.synchronize { queues << q }
+        end
+      end
+
+      threads.each(&:join)
+      expect(queues.uniq.size).to eq(1)
+      queues.first.stop
+    end
+  end
+
   describe 'thread safety' do
     it 'handles concurrent state access without deadlock' do
       readers = 5.times.map do
@@ -352,6 +389,42 @@ RSpec.describe RBLE::Connection do
 
       threads.each(&:join)
       expect(final_states).to all(eq(:disconnected))
+    end
+
+    it 'does not produce torn reads of @services during concurrent disconnect' do
+      allow(mock_backend).to receive(:disconnect_device)
+      allow(mock_backend).to receive(:discover_services).and_return([
+        { uuid: '0000180d-0000-1000-8000-00805f9b34fb', primary: true,
+          characteristics: [{ data: double(uuid: '2a37', flags: ['notify'], service_uuid: '0000180d-0000-1000-8000-00805f9b34fb'), path: '/char/0001', descriptors: [] }] }
+      ])
+
+      connection.discover_services
+      observed = []
+      barrier = Queue.new
+
+      reader = Thread.new do
+        barrier.pop
+        50.times do
+          val = begin
+            connection.services
+          rescue RBLE::ServiceDiscoveryError
+            :cleared
+          end
+          observed << (val.nil? ? :nil : val.class)
+        end
+      end
+
+      disconnector = Thread.new do
+        barrier.pop
+        connection.disconnect
+      end
+
+      # Release both threads simultaneously
+      2.times { barrier.push(true) }
+      [reader, disconnector].each { |t| t.join(5) }
+
+      # Every observation should be a valid state: Array (services) or :cleared (nil after disconnect)
+      expect(observed).to all(satisfy { |v| v == Array || v == :cleared })
     end
   end
 end

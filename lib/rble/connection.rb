@@ -118,9 +118,10 @@ module RBLE
       begin
         # Pass self so backend can use our D-Bus session
         raw_services = @backend.discover_services(@device_path, connection: self, timeout: timeout)
-        @services = build_services_with_active_characteristics(raw_services)
+        services = build_services_with_active_characteristics(raw_services)
+        @state_mutex.synchronize { @services = services }
         transition_to(:connected)
-        @services
+        services
       rescue StandardError => e
         # On failure, return to connected state (if not already disconnected)
         RBLE.logger&.debug("[RBLE] Service discovery failed: #{e.class}: #{e.message}")
@@ -133,9 +134,10 @@ module RBLE
     # @return [Array<Service>]
     # @raise [ServiceDiscoveryError] if discover_services not called
     def services
-      raise ServiceDiscoveryError, 'Call discover_services first' if @services.nil?
+      svcs = @state_mutex.synchronize { @services }
+      raise ServiceDiscoveryError, 'Call discover_services first' if svcs.nil?
 
-      @services
+      svcs
     end
 
     # Get list of currently subscribed characteristic UUIDs
@@ -177,7 +179,7 @@ module RBLE
         # Destroy D-Bus session (stops event loop, closes connection)
         destroy_dbus_session
         transition_to(:disconnected, reason: :user_requested)
-        @services = nil
+        @state_mutex.synchronize { @services = nil }
       end
     end
 
@@ -190,7 +192,7 @@ module RBLE
       # Destroy D-Bus session on unexpected disconnect
       destroy_dbus_session
       transition_to(:disconnected, reason: reason)
-      @services = nil
+      @state_mutex.synchronize { @services = nil }
       true
     end
 
@@ -228,6 +230,19 @@ module RBLE
       return unless bluez_backend?
 
       start_notification_thread
+    end
+
+    # Get or create GATT operation queue for this connection
+    # Queue is started on first access and stopped on disconnect
+    # @return [RBLE::BlueZ::GattOperationQueue]
+    def gatt_queue
+      @notification_mutex.synchronize do
+        return @gatt_queue if @gatt_queue&.running?
+
+        @gatt_queue = RBLE::BlueZ::GattOperationQueue.new
+        @gatt_queue.start
+        @gatt_queue
+      end
     end
 
     private
@@ -425,17 +440,6 @@ module RBLE
       ensure
         @dbus_session = nil
       end
-    end
-
-    # Get or create GATT operation queue for this connection
-    # Queue is started on first access and stopped on disconnect
-    # @return [RBLE::BlueZ::GattOperationQueue]
-    def gatt_queue
-      return @gatt_queue if @gatt_queue&.running?
-
-      @gatt_queue = RBLE::BlueZ::GattOperationQueue.new
-      @gatt_queue.start
-      @gatt_queue
     end
 
     # Transition to a new state, calling callbacks outside the mutex

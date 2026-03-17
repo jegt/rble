@@ -15,6 +15,7 @@ module RBLE
 
         if device_path.nil?
           $stderr.puts "Device not paired"
+          @formatter.pair_result(success: true, address: @address, message: "Not paired")
           return
         end
 
@@ -27,6 +28,7 @@ module RBLE
           @formatter.pair_result(success: true, address: @address, message: "Pairing removed")
         when :not_paired
           $stderr.puts "Device not paired"
+          @formatter.pair_result(success: true, address: @address, message: "Not paired")
         end
       rescue RBLE::Error => e
         $stderr.puts "Error: #{e.message}"

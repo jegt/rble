@@ -31,13 +31,18 @@ module RBLE
       # Each parser is a lambda: (raw_bytes_string) -> formatted_string
       PARSERS = {
         # Battery Level: uint8, percentage
-        "2a19" => ->(raw) { "#{raw.unpack1('C')}%" },
+        "2a19" => ->(raw) {
+          return "malformed" if raw.bytesize < 1
+          "#{raw.unpack1('C')}%"
+        },
 
         # Heart Rate Measurement: flags + uint8/uint16
         "2a37" => ->(raw) {
+          return "malformed" if raw.bytesize < 2
           flags = raw.getbyte(0)
           hr_16bit = (flags & 0x01) == 1
           if hr_16bit
+            return "malformed" if raw.bytesize < 3
             hr = raw[1, 2].unpack1('S<')
           else
             hr = raw.getbyte(1)
@@ -47,6 +52,7 @@ module RBLE
 
         # Temperature (Environmental Sensing): sint16 LE / 100
         "2a6e" => ->(raw) {
+          return "malformed" if raw.bytesize < 2
           raw_val = raw.unpack1('s<')
           temp = raw_val / 100.0
           format('%.2f C', temp)
@@ -54,6 +60,7 @@ module RBLE
 
         # Temperature Measurement (Health Thermometer): flags + IEEE 11073 FLOAT
         "2a1c" => ->(raw) {
+          return "malformed" if raw.bytesize < 5
           flags = raw.getbyte(0)
           unit = (flags & 0x01) == 0 ? 'C' : 'F'
           temp = ieee_11073_float(raw[1, 4])
@@ -61,10 +68,14 @@ module RBLE
         },
 
         # Tx Power Level: sint8, dBm
-        "2a07" => ->(raw) { "#{raw.unpack1('c')} dBm" },
+        "2a07" => ->(raw) {
+          return "malformed" if raw.bytesize < 1
+          "#{raw.unpack1('c')} dBm"
+        },
 
         # Blood Pressure Measurement: flags + 3x SFLOAT
         "2a35" => ->(raw) {
+          return "malformed" if raw.bytesize < 5
           flags = raw.getbyte(0)
           unit = (flags & 0x01) == 0 ? 'mmHg' : 'kPa'
           systolic = ieee_11073_sfloat(raw[1, 2])
@@ -74,6 +85,7 @@ module RBLE
 
         # Humidity: uint16 LE / 100
         "2a6f" => ->(raw) {
+          return "malformed" if raw.bytesize < 2
           raw_val = raw.unpack1('S<')
           humidity = raw_val / 100.0
           format('%.2f%%', humidity)
@@ -102,6 +114,7 @@ module RBLE
 
         # Body Sensor Location: uint8 enum
         "2a38" => ->(raw) {
+          return "malformed" if raw.bytesize < 1
           val = raw.unpack1('C')
           BODY_SENSOR_LOCATIONS.fetch(val, "Location: #{val}")
         }
@@ -184,6 +197,8 @@ module RBLE
       def self.normalize_key(uuid)
         key = uuid.downcase.sub(/\A0x/, '')
         if key =~ /\A0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb\z/
+          Regexp.last_match(1)
+        elsif key =~ /\A0000([0-9a-f]{4})\z/
           Regexp.last_match(1)
         else
           key
