@@ -103,7 +103,7 @@ RSpec.describe RBLE::CLI::Monitor do
   before do
     allow(RBLE::Backend).to receive(:for_platform).and_return(backend)
     allow(RBLE).to receive(:connect).and_return(connection)
-    # Stub sleep to avoid delays
+    # Stub sleep to avoid delays (use Kernel to avoid any_instance_of conflicts)
     allow_any_instance_of(described_class).to receive(:sleep)
   end
 
@@ -333,9 +333,13 @@ RSpec.describe RBLE::CLI::Monitor do
   describe "--reconnect" do
     it "retries after disconnect when reconnect is enabled" do
       connect_count = 0
+      monitor = described_class.new(make_options("reconnect" => true))
+      setup_subscribe_with_value(hr_char, hr_value)
+
       allow(RBLE).to receive(:connect) do |*_args, **_kwargs|
         connect_count += 1
-        # Each connection disconnects after a few connected? checks
+        # Stop after 3 connections to prevent infinite loop
+        monitor.instance_variable_set(:@stop, true) if connect_count >= 3
         conn = double("connection_#{connect_count}",
           discover_services: nil,
           disconnect: nil,
@@ -348,19 +352,6 @@ RSpec.describe RBLE::CLI::Monitor do
         end
         conn
       end
-      setup_subscribe_with_value(hr_char, hr_value)
-
-      monitor = described_class.new(make_options("reconnect" => true))
-      # Track reconnect sleeps (sleep 2) vs poll sleeps (sleep 0.1)
-      reconnect_sleep_count = 0
-      allow(monitor).to receive(:sleep) do |duration|
-        if duration == 2
-          reconnect_sleep_count += 1
-          # Stop after second reconnect attempt
-          monitor.instance_variable_set(:@stop, true) if reconnect_sleep_count >= 2
-        end
-        # sleep 0.1 is a no-op (poll loop)
-      end
 
       capture_output { monitor.execute }
 
@@ -368,12 +359,13 @@ RSpec.describe RBLE::CLI::Monitor do
     end
 
     it "stops reconnecting on Ctrl+C" do
-      setup_subscribe_with_value(hr_char, hr_value)
-
       monitor = described_class.new(make_options("reconnect" => true))
-      # Simulate Ctrl+C by setting stop flag on first sleep
-      allow(monitor).to receive(:sleep) do
+
+      # Simulate Ctrl+C during subscribe: set @stop when subscribe callback fires
+      allow(hr_char).to receive(:subscribe) do |&block|
+        block.call(hr_value)
         monitor.instance_variable_set(:@stop, true)
+        true
       end
 
       result = capture_output { monitor.execute }

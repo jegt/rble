@@ -28,9 +28,9 @@ jobs:
       - name: Run specs
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            bundle exec rspec --format documentation --exclude-pattern "spec/rble/bluez/**/*,spec/rble/backend/bluez_spec.rb,spec/integration/**/*"
+            bundle exec rspec --exclude-pattern "spec/rble/bluez/**/*,spec/rble/backend/bluez_spec.rb,spec/integration/**/*"
           else
-            bundle exec rspec --format documentation
+            bundle exec rspec
           fi
       - name: Verify gem builds
         run: gem build rble.gemspec
