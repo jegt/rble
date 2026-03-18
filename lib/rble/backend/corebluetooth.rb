@@ -40,8 +40,6 @@ module RBLE
         # (event_processor_thread and user thread)
         @state_mutex = Mutex.new
 
-        # Best-effort cleanup on process exit
-        at_exit { cleanup_all_connections }
       end
 
       # Start the subprocess if not running

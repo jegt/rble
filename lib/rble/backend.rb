@@ -155,7 +155,27 @@ module RBLE
           ensure_backend_selected
           @backend_instance ||= load_backend(@backend_symbol)
           @backend_frozen = true
+          register_exit_cleanup unless @exit_cleanup_registered
           @backend_instance
+        end
+      end
+
+      # Register a single at_exit hook for best-effort connection cleanup.
+      # Reads the current singleton at exit time so that Backend.reset!
+      # (used in test teardown) makes this a no-op.
+      def register_exit_cleanup
+        @exit_cleanup_registered = true
+        at_exit do
+          instance = @backend_mutex.synchronize { @backend_instance }
+          next unless instance
+
+          cleanup = Thread.new do
+            instance.send(:cleanup_all_connections)
+          rescue StandardError
+            # best-effort
+          end
+          cleanup.join(5)
+          cleanup.kill if cleanup.alive?
         end
       end
 

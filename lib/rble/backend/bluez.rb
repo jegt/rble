@@ -31,8 +31,6 @@ module RBLE
         # (D-Bus signal handlers run on rble-dbus-loop thread, user code on main thread)
         @state_mutex = Mutex.new
 
-        # Best-effort cleanup on process exit
-        at_exit { cleanup_all_connections }
       end
 
       # Start scanning for BLE devices

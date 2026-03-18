@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.1] - 2026-03-18
+
+### Fixed
+
+- **`at_exit` hook hangs CI** — Per-instance `at_exit { cleanup_all_connections }` in backend initializers caused process hang at exit when the singleton was reset during test teardown. Moved to a single class-level hook in `Backend` that reads the current singleton at exit time (no-op after `Backend.reset!`) with a 5-second thread timeout.
+- **CI timeout** — Added `timeout-minutes: 10` to CI workflow as a safety net.
+
 ## [0.7.0] - 2026-03-17
 
 ### Fixed (Critical)
