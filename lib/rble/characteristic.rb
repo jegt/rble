@@ -227,11 +227,8 @@ module RBLE
     # @yield Block containing the GATT operation
     # @return [Object] Result from the block
     def enqueue_gatt_operation(&block)
-      if @connection.respond_to?(:gatt_queue)
-        @connection.gatt_queue.enqueue(&block)
-      else
-        block.call
-      end
+      queue = @connection.respond_to?(:gatt_queue) ? @connection.gatt_queue : nil
+      queue ? queue.enqueue(&block) : block.call
     end
   end
 end

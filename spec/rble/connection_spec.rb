@@ -310,8 +310,23 @@ RSpec.describe RBLE::Connection do
   end
 
   describe '#gatt_queue' do
+    let(:bluez_backend) { true }
+
+    before do
+      allow(connection).to receive(:bluez_backend?).and_return bluez_backend
+    end
+
     it 'is a public method' do
       expect(connection.respond_to?(:gatt_queue)).to be true
+    end
+
+    context 'if no bluez backend' do
+      let(:bluez_backend) { false }
+
+      it 'returns nil' do
+        queue = connection.gatt_queue
+        expect(queue).to be_nil
+      end
     end
 
     it 'returns a GattOperationQueue' do
@@ -342,6 +357,21 @@ RSpec.describe RBLE::Connection do
       threads.each(&:join)
       expect(queues.uniq.size).to eq(1)
       queues.first.stop
+    end
+  end
+
+  describe '#service' do
+    before do
+      allow(mock_backend).to receive(:discover_services).and_return([
+        { uuid: '180D', primary: true,
+          characteristics: [{ data: double(uuid: '180D', flags: ['notify'], service_uuid: '0000180D-0000-1000-8000-00805f9b34fb'), path: '/char/0001', descriptors: [] }] }
+      ])
+    end
+
+    it 'finds the right service' do
+      connection.discover_services
+
+      expect(connection.service('180D')).not_to be_nil
     end
   end
 
