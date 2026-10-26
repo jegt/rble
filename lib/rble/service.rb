@@ -25,7 +25,7 @@ module RBLE
     # @return [Characteristic, ActiveCharacteristic, nil]
     def characteristic(char_uuid)
       normalized = normalize_uuid(char_uuid)
-      characteristics.find { |c| c.uuid.downcase == normalized || c.short_uuid == char_uuid.downcase }
+      characteristics.find { |c| c.uuid.downcase == normalized || c.short_uuid.downcase == char_uuid.downcase }
     end
 
     private

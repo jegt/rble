@@ -158,7 +158,7 @@ module RBLE
     # @raise [ServiceDiscoveryError] if discover_services not called
     def service(uuid)
       normalized = normalize_uuid(uuid)
-      found = services.find { |s| s.uuid.downcase == normalized || s.short_uuid == uuid.downcase }
+      found = services.find { |s| s.uuid.downcase == normalized || s.short_uuid.downcase == uuid.downcase }
       raise ServiceNotFoundError, uuid unless found
 
       found
@@ -236,6 +236,8 @@ module RBLE
     # Queue is started on first access and stopped on disconnect
     # @return [RBLE::BlueZ::GattOperationQueue]
     def gatt_queue
+      return nil unless bluez_backend?
+
       @notification_mutex.synchronize do
         return @gatt_queue if @gatt_queue&.running?
 
